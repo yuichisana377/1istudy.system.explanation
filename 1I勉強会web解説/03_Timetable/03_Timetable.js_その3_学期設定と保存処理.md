@@ -64,6 +64,21 @@ function resetTermForm() {
 - `termEditState`は、学期編集モーダルで**今まさに入力中の内容**を保持するオブジェクトです。`id`が`null`なら「新規作成中」、値が入っていれば「既存の学期を編集中」を意味します。
 - モーダルを開くたびに`loadTerms()`でサーバーから最新の学期一覧を取り直し、`renderTermList()`（4節）で登録済み学期の一覧を更新します。
 
+```js
+function onTermNameSel() {
+  const sel = document.getElementById('tt-term-name-sel');
+  const inp = document.getElementById('tt-term-name-inp');
+  if (!sel || !inp) return;
+  if (sel.value === '__custom__') { inp.style.display = 'block'; inp.focus(); }
+  else { inp.style.display = 'none'; }
+}
+function getTermNameValue() {
+  const sel = document.getElementById('tt-term-name-sel');
+  if (!sel) return '';
+  if (sel.value === '__custom__') return (document.getElementById('tt-term-name-inp')?.value || '').trim();
+  return sel.value;
+}
+```
 `onTermNameSel()`/`getTermNameValue()`（1036〜1048行）は、学期名の入力欄が「前期」「後期」の定型選択か「自由入力…」かで、実際に使う値の取り出し方を切り替える、[../01_index_予定管理.md](../01_index_予定管理.md)の`getCatValue`と同じパターンの関数です。
 
 ---
@@ -193,6 +208,32 @@ function editTermFromList(id) {
 ```
 - 既存の学期を編集モードで開く関数です。ここでも1節の`cloneDayPeriods`が使われ、`terms`配列に入っている元データを直接書き換えないよう、複製してから`termEditState`にセットしています（キャンセルした場合に元のデータが壊れないようにするための配慮です）。
 
+```js
+async function deleteTermFromList(id) {
+  const session = requireLoginOrRedirect();
+  if (!session) return;
+  const t = terms.find(x => x.id === id);
+  if (!t) return;
+  const ok = await showAppConfirm({
+    title: '削除しますか？', desc: `「${t.name}」（${t.start_date}〜${t.end_date}）を削除します。`,
+    okLabel: '削除する', danger: true,
+  });
+  if (!ok) return;
+  try {
+    const res = await api(TERM_API.DELETE, { method: 'POST', body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, id, nickname: session.nickname }) });
+    if (res.ok) {
+      await loadTerms();
+      renderTermList();
+      renderTimetable();
+      if (termEditState && termEditState.id === id) resetTermForm();
+    } else {
+      showErr('tt-term-err', res.error || '削除に失敗しました');
+    }
+  } catch (e) {
+    showErr('tt-term-err', 'サーバーに接続できませんでした');
+  }
+}
+```
 `deleteTermFromList(id)`（1167〜1190行）は確認ダイアログのあと、サーバーの`/delete_term`に削除を依頼し、成功したら学期一覧・時間割表示の両方を更新します。**もし削除した学期が、今まさに編集中の学期だった場合は`resetTermForm()`でフォームもリセットします**（存在しなくなったデータを編集し続けてしまう状態を防ぐため）。
 
 ---
