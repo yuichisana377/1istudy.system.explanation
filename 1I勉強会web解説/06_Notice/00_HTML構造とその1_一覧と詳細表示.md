@@ -30,7 +30,15 @@ Notice.htmlは`Dropdown.js`を読み込んでいません（`<select>`要素自�
 // ★ 追加：変更系の操作（投稿・実行済み切替・削除）はサーバー側もログイン必須に
 //   なった（2026/08/19）。以前あった「匿名のまま投稿する」選択肢は廃止し、
 //   未ログインなら必ずログイン画面へ誘導する。
-function requireLoginOrRedirect() { ... }
+function requireLoginOrRedirect() {
+  const s = getLoginSession();
+  if (!s || !s.session_token) {
+    sessionStorage.setItem('post_login_redirect', location.href);
+    location.href = LOGIN_PATH;
+    return null;
+  }
+  return s;
+}
 ```
 - コメントに、[../00_HTML構造とページ全体像.md](../01_index_予定管理.md)のシリーズ最初の記事でも触れた「以前は『匿名のまま投稿しますか？』という確認ダイアログで未ログイン投稿を許していたが、廃止した」という経緯が改めて記録されています。
 
@@ -78,7 +86,17 @@ async function loadNotices() {
 function renderNotices() {
   const el = document.getElementById('notice-content');
   el.innerHTML = ''; // ここは固定文字列のクリアのみなので安全
-  ...
+
+  if (!notices.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-msg';
+    empty.textContent = 'お知らせはまだありません';
+    el.appendChild(empty);
+    return;
+  }
+
+  // ★ 「実行済み」にしたお知らせは一覧の一番下にまとめる
+  //   （元々の並び順＝新しい順は、未実行・実行済みそれぞれのグループ内では維持する）
   const undone = notices.filter(n => !n.done);
   const done    = notices.filter(n => n.done);
   const ordered = [...undone, ...done];
@@ -88,13 +106,34 @@ function renderNotices() {
     const card = document.createElement('div');
     card.className = 'notice-card' + (n.done ? ' notice-done' : '');
     card.addEventListener('click', () => openViewModal(n.filename));
-    ...
+
+    const badge = document.createElement('span');
+    badge.className = 'notice-badge ' + extBadgeClass(n.ext);
+    badge.textContent = (n.ext || '').toUpperCase();
+
     const nameEl = document.createElement('span');
     nameEl.className = 'notice-name';
     nameEl.appendChild(document.createTextNode(n.filename));
-    ...
+    const metaParts = [];
+    if (n.uploader) metaParts.push(`${n.uploader}さん`);
+    if (n.uploaded_at) metaParts.push(n.uploaded_at);
+    if (metaParts.length) {
+      const meta = document.createElement('span');
+      meta.className = 'notice-meta';
+      meta.textContent = metaParts.join(' ・ ');
+      nameEl.appendChild(meta);
+    }
+
+    const arrow = document.createElement('span');
+    arrow.className = 'notice-arrow';
+    arrow.textContent = '›';
+
+    card.appendChild(badge);
+    card.appendChild(nameEl);
+    card.appendChild(arrow);
     list.appendChild(card);
   });
+
   el.appendChild(list);
 }
 ```
@@ -137,29 +176,50 @@ async function setNoticeDone(filename, nextDone) {
 async function openViewModal(filename) {
   currentViewFilename = filename;
   document.getElementById('view-filename').textContent = filename;
-  ...
-  const data = await api(`/get_notice?filename=${encodeURIComponent(filename)}`);
-  ...
-  if (data.ok) {
-    currentViewContent = data.content;
-    renderNoticeBody(bodyEl, filename, data.content);
-    ...
-  } else {
+  document.getElementById('view-meta').textContent = '';
+  const bodyEl = document.getElementById('view-body');
+  bodyEl.innerHTML = '';
+  document.getElementById('view-loading').style.display = 'block';
+  document.getElementById('modal-view').classList.add('open');
+  updateViewDoneBtn(); // ★ 追加：「実行済みにする」ボタンの表示を、このお知らせの状態に合わせる
+
+  try {
+    const data = await api(`/get_notice?filename=${encodeURIComponent(filename)}`);
+    document.getElementById('view-loading').style.display = 'none';
+    if (data.ok) {
+      currentViewContent = data.content;
+      renderNoticeBody(bodyEl, filename, data.content);
+      const metaParts = [];
+      if (data.uploader) metaParts.push(`${data.uploader}さん`);
+      if (data.uploaded_at) metaParts.push(data.uploaded_at);
+      document.getElementById('view-meta').textContent = metaParts.join(' ・ ');
+    } else {
+      bodyEl.classList.add('notice-plain');
+      bodyEl.textContent = '読み込みに失敗しました: ' + (data.error || '');
+    }
+  } catch (e) {
+    document.getElementById('view-loading').style.display = 'none';
     bodyEl.classList.add('notice-plain');
-    bodyEl.textContent = '読み込みに失敗しました: ' + (data.error || '');
+    bodyEl.textContent = 'サーバーに接続できませんでした';
   }
 }
 ```
 - 一覧ではメタ情報しか持っていないため、実際の本文はモーダルを開いた瞬間に個別取得します（[../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)の「一覧は軽量メタ情報のみ、本体は開いたときに取得」という設計と同じ考え方です）。
 
 ```js
+/** .md は GitHub 風に Markdown レンダリング、.txt はプレーンテキスト表示 */
 function renderNoticeBody(bodyEl, filename, content) {
   const isMd = /\.md$/i.test(filename);
+  // ★ セキュリティ：DOMPurifyが読み込めていない場合、サニタイズ無しでHTMLを
+  //   描画する（＝XSS）フォールバックには絶対にしない。その場合はプレーン
+  //   テキスト表示にとどめる（marked単体では危険なHTMLがそのまま通ってしまうため）。
   if (isMd && window.marked && window.DOMPurify) {
+    bodyEl.classList.remove('notice-plain');
     bodyEl.classList.add('markdown-body');
     const rawHtml = marked.parse(content, { breaks: true, gfm: true });
     bodyEl.innerHTML = DOMPurify.sanitize(rawHtml);
   } else {
+    bodyEl.classList.remove('markdown-body');
     bodyEl.classList.add('notice-plain');
     bodyEl.textContent = content;
   }
@@ -174,13 +234,27 @@ function renderNoticeBody(bodyEl, filename, content) {
 
 ```js
 function switchNoticeTab(tab) {
+  const editBtn = document.getElementById('tab-edit-btn');
+  const previewBtn = document.getElementById('tab-preview-btn');
+  const textarea = document.getElementById('upload-content');
+  const previewEl = document.getElementById('upload-preview');
+
   if (tab === 'preview') {
     const filename = document.getElementById('upload-filename').value.trim();
     const content = textarea.value;
+    // renderNoticeBody は .md 拡張子のときのみ Markdown レンダリング、それ以外はプレーン表示
+    previewEl.innerHTML = '';
+    previewEl.className = 'notice-body';
     renderNoticeBody(previewEl, filename, content || '（内容がありません）');
-    ...
+    previewEl.style.display = 'block';
+    textarea.style.display = 'none';
+    previewBtn.classList.add('active');
+    editBtn.classList.remove('active');
   } else {
-    ...
+    previewEl.style.display = 'none';
+    textarea.style.display = 'block';
+    editBtn.classList.add('active');
+    previewBtn.classList.remove('active');
   }
 }
 ```
@@ -205,12 +279,17 @@ function scheduleDraftSave() {
 function saveDraftNow() {
   const filename = document.getElementById('upload-filename').value;
   const content = document.getElementById('upload-content').value;
+  const statusEl = document.getElementById('draft-status');
+
   if (!filename.trim() && !content.trim()) return; // 空なら保存しない
+
   const key = isEditingNotice ? draftKeyForEdit(editingOriginalFilename) : DRAFT_KEY_NEW;
   try {
     localStorage.setItem(key, JSON.stringify({ filename, content, ts: Date.now() }));
-    statusEl.innerHTML = ... + ' 下書きを自動保存しました（' + new Date().toLocaleTimeString('ja-JP') + '）';
-  } catch (e) {}
+    statusEl.innerHTML = Icons.html('save', {size:14}) + ' 下書きを自動保存しました（' + new Date().toLocaleTimeString('ja-JP') + '）';
+  } catch (e) {
+    // localStorage が使えない環境では何もしない
+  }
 }
 ```
 - **新規投稿の下書き**（`DRAFT_KEY_NEW`という共通の1つのキー）と、**既存のお知らせを編集中の下書き**（`draftKeyForEdit(元のファイル名)`という、お知らせごとに別々のキー）を使い分けています。新規投稿の下書きは常に1つしか保持できませんが、編集中の下書きは編集対象のお知らせごとに別々に保存されます。
