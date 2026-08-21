@@ -69,7 +69,7 @@ def discord_oauth_callback():
         token_res.raise_for_status()
         access_token = token_res.json()["access_token"]
     except Exception:
-        return _oauth_result_page(False, "Discordとの認証に失敗しました。...")
+        return _oauth_result_page(False, "Discordとの認証に失敗しました。時間をおいてもう一度お試しください。")
 ```
 - OAuth2の標準的な手順で、Discordから受け取った一時的な「認可コード」（`code`）を、Discord自身のAPIサーバーに送り返して、実際に使える「アクセストークン」に交換してもらいます。この交換には`DISCORD_CLIENT_SECRET`（秘密鍵）が必要で、これを持っているのはこのサーバーだけです。**ブラウザ側は`code`しか受け取らず、`access_token`への交換はサーバー間の通信でのみ行われる**という、OAuth2の安全性の根幹をなす手順です。
 - `requests.post(...)`… Pythonの`requests`ライブラリで、外部のAPI（Discord）へHTTPリクエストを送っています。`timeout=10`（10秒でタイムアウト）と`raise_for_status()`（エラーのステータスコードなら例外を発生させる）で、外部サービスとの通信特有の失敗（応答が来ない、エラーが返る）に備えています。
