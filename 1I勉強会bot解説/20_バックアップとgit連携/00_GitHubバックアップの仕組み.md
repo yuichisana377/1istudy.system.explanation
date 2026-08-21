@@ -111,7 +111,11 @@ def _summarize_backup_changes(porcelain_output):
     「学習データ2件、ポイント1件」のような短い日本語にまとめる。"""
     counts = {}
     for line in porcelain_output.splitlines():
-        ...
+        if len(line) < 4:
+            continue
+        rel = line[3:].strip().split(" -> ")[-1]
+        if rel.startswith("data/"):
+            rel = rel[len("data/"):]
         label = _backup_category(rel)
         counts[label] = counts.get(label, 0) + 1
     if not counts:
@@ -137,7 +141,9 @@ def backup_data_to_github():
 ```python
     try:
         if not os.path.isdir(os.path.join(BACKUP_REPO_DIR, ".git")):
-            ...
+            parent = os.path.dirname(BACKUP_REPO_DIR)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
             _run_git(["clone", BACKUP_REPO_URL, BACKUP_REPO_DIR], cwd=".", use_auth=True)
         else:
             _run_git(["fetch", "origin", "main"], cwd=BACKUP_REPO_DIR, use_auth=True)
