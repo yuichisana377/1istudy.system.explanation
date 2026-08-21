@@ -24,6 +24,40 @@ function openTTEditModal() {
 ```
 - カレンダーを2つ（対象日付用・複数日設定の終了日用）初期化し、フォームをリセットし、科目セレクトを最新の科目一覧で更新してから、デフォルトで「授業変更」タブを開いた状態でモーダルを表示します。同時に、下部の「保存済みの変更一覧」（[03_Timetable.js_その3_学期設定と保存処理.md](03_Timetable.js_その3_学期設定と保存処理.md)で解説）も更新します。
 
+```js
+function resetTTEditForm() {
+  const subjEl = document.getElementById('tt-edit-subject');
+  if (subjEl) subjEl.value = '';
+  document.getElementById('tt-edit-items').value          = '';
+  document.getElementById('tt-edit-note').value           = '';
+  document.getElementById('tt-edit-holiday-note').value   = '';
+  document.getElementById('tt-edit-holiday-reason').value = '休校';
+  document.getElementById('tt-edit-period').value         = '1';
+
+  const phReason = document.getElementById('tt-edit-period-holiday-reason');
+  const phNote   = document.getElementById('tt-edit-period-holiday-note');
+  if (phReason) phReason.value = '休み';
+  if (phNote)   phNote.value   = '';
+
+  const dcNote = document.getElementById('tt-day-change-note');
+  if (dcNote) dcNote.value = '';
+  const dcSource = document.getElementById('tt-day-change-source');
+  if (dcSource) dcSource.value = '';
+  const dcPreview = document.getElementById('tt-day-change-preview');
+  if (dcPreview) dcPreview.innerHTML = '<div style="font-size:13px;color:var(--text-tertiary)">先に日付とコピー元の曜日を選択してください</div>';
+
+  // ★ 複数日設定をリセット
+  const multiCb = document.getElementById('tt-edit-multi');
+  if (multiCb) multiCb.checked = false;
+  const endField = document.getElementById('tt-edit-end-date-field');
+  if (endField) endField.style.display = 'none';
+  const dateLabel = document.getElementById('tt-edit-date-label');
+  if (dateLabel) dateLabel.textContent = '対象日付';
+
+  resetCal('tt-edit', '日付を選択');
+  resetCal('tt-edit-end', '終了日を選択');
+}
+```
 `resetTTEditForm()`（800〜831行）は、4つの編集モードすべての入力欄をまとめて初期状態に戻す関数です。「複数日にまとめて適用する」チェックボックスも毎回オフに戻され、対応する終了日欄も隠されます。
 
 ---
