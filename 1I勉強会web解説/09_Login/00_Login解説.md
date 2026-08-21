@@ -27,8 +27,14 @@
 const AVATAR_COLORS = [
   { color: "#dbeafe", text: "#1e40af" },
   { color: "#dcfce7", text: "#166534" },
-  ... （全8色）
+  { color: "#fce7f3", text: "#9d174d" },
+  { color: "#ffedd5", text: "#9a3412" },
+  { color: "#fef9c3", text: "#854d0e" },
+  { color: "#ede9fe", text: "#6d28d9" },
+  { color: "#fee2e2", text: "#991b1b" },
+  { color: "#f0fdf4", text: "#15803d" },
 ];
+// ID（文字列）から常に同じ色を選ぶ（新規登録時のインデックスに依存しないように）
 function paletteFor(id) {
   let hash = 0;
   for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
@@ -46,34 +52,42 @@ function paletteFor(id) {
 window.addEventListener("load", () => {
   const params = new URLSearchParams(location.search);
 
+  // ★ 既にDiscordログイン登録済みの場合：APIサーバー（別ドメイン）側では
+  //   localStorageを共有できないため、session_tokenをURLのクエリパラメータで
+  //   受け取り、ここ（フロントエンドのドメイン上）でlocalStorageに保存する。
   const discordToken = params.get("discord_session_token");
   if (discordToken) {
     const studentId = params.get("student_id") || "";
     const nickname  = params.get("nickname") || studentId;
     const palette   = paletteFor(studentId);
     saveSession({ id: studentId, nickname }, discordToken, palette);
-    history.replaceState(null, "", location.pathname);
+    history.replaceState(null, "", location.pathname); // URLからトークンを消す
     location.href = getRedirectTarget();
     return;
   }
-  ...
+
+  // ★ Discordログインで初回登録が必要な場合、/discord_login_start →
+  //   Discord認可 → コールバック経由で ?discord_reg=<dtoken> 付きで
+  //   このページに戻ってくる。最優先でそちらを処理する。
+  const dtoken = params.get("discord_reg");
+  if (dtoken) {
+    openDiscordRegisterStep(dtoken);
+    return;
+  }
+
+  // 自動ログイン（localStorage に session_token 付きの保存済みセッションがある場合のみ）
+  const saved = getSession();
+  if (saved && saved.session_token) {
+    autoLogin(saved);
+    return;
+  }
+  localStorage.removeItem(SESSION_KEY); // session_tokenの無い旧形式セッションは破棄
+  showStep("step-id");
 });
 ```
 - コメントに「APIサーバー（別ドメイン）側では`localStorage`を共有できないため、`session_token`をURLのクエリパラメータで受け取り、ここ（フロントエンドのドメイン上）で`localStorage`に保存する」とあります。これは[../00_HTML構造とページ全体像.md](../01_index_予定管理.md)で触れた「Cloudflare Pagesのフロント」と「Tailscale経由のバックエンド」がそれぞれ別のドメイン（オリジン）である、という構成に由来する制約です。`localStorage`はドメインごとに独立しているため、バックエンド側でセッションを発行しても、それをフロント側の`localStorage`に直接書き込むことはできません。そこでDiscordの認可が終わったサーバー側は、ログイン情報を**URLのクエリパラメータに載せてこのページに戻す**ことで、フロントのドメイン上で動くこのJSが受け取って`localStorage`に保存する、という橋渡しをしています。
 - 受け取ったら`history.replaceState`でURLからトークンを消し（ブラウザ履歴やアクセスログに残さないため）、目的地へ遷移します。
-
-```js
-const dtoken = params.get("discord_reg");
-if (dtoken) { openDiscordRegisterStep(dtoken); return; }
-```
-- 初回登録が必要な場合の分岐です（4節で詳しく解説）。
-
-```js
-const saved = getSession();
-if (saved && saved.session_token) { autoLogin(saved); return; }
-localStorage.removeItem(SESSION_KEY); // session_tokenの無い旧形式セッションは破棄
-showStep("step-id");
-```
+- `discord_reg`パラメータがあれば初回登録が必要な場合の分岐です（4節で詳しく解説）。
 - 上記どちらの特別なURLパラメータも無ければ、既存のセッションが保存されていないか確認します。あれば自動ログイン（3節）、無ければ`step-id`（ログインボタンだけの画面）を表示します。`session_token`の無い古い形式のセッションが残っていた場合は、この機会に消しておきます（パスワード方式が廃止された経緯にある、過去の名残データの掃除です）。
 
 ---
@@ -124,42 +138,67 @@ function loginWithDiscord() {
 
 ### 4.1 登録画面を開く：`openDiscordRegisterStep(dtoken)`（188〜209行）
 ```js
-document.getElementById("inp-dtoken").value = dtoken;
-showStep("step-discord-reg");
-try {
-  const info = await fetchDiscordRegInfo(dtoken);
-  if (info.ok && info.discord_username) {
-    const nickEl = document.getElementById("inp-discord-nickname");
-    if (nickEl && !nickEl.value) nickEl.value = info.discord_username.slice(0, 16);
-  } else if (!info.ok) {
-    showDiscordRegErr("このリンクの有効期限が切れています。もう一度「Discordでログイン」からやり直してください。");
+async function openDiscordRegisterStep(dtoken) {
+  document.getElementById("inp-dtoken").value = dtoken;
+  document.getElementById("discord-reg-err").style.display = "none";
+
+  showStep("step-discord-reg");
+
+  try {
+    const info = await fetchDiscordRegInfo(dtoken);
+    if (info.ok && info.discord_username) {
+      // Discordの表示名をニックネームの初期値として提案する（そのまま使うかは本人の自由）
+      const nickEl = document.getElementById("inp-discord-nickname");
+      if (nickEl && !nickEl.value) nickEl.value = info.discord_username.slice(0, 16);
+    } else if (!info.ok) {
+      showDiscordRegErr("このリンクの有効期限が切れています。もう一度「Discordでログイン」からやり直してください。");
+    }
+  } catch {
+    // 参考情報の取得に失敗しても、登録フォーム自体は使えるので致命的ではない
   }
-} catch { /* 参考情報の取得に失敗しても、登録フォーム自体は使えるので致命的ではない */ }
-history.replaceState(null, "", location.pathname);
+
+  // URLに残った ?discord_reg=... を消しておく（再読み込みで壊れないように）
+  history.replaceState(null, "", location.pathname);
+}
 ```
 - `dtoken`（Discord認可直後に発行される、登録専用の一時トークン）を隠しフィールドに保存しつつ、Discordの表示名を`discord_reg_info`というAPIから取得し、ニックネームの初期値として提案します（「そのまま使うかは本人の自由」とコメントにあり、あくまで入力の手間を減らす親切機能です）。この取得に失敗しても、登録フォーム自体（学籍番号・ニックネームの手入力）は変わらず使えるため、致命的なエラーとしては扱いません。
 
 ### 4.2 登録の送信：`submitDiscordRegister()`（211〜245行）
 ```js
-const id = document.getElementById("inp-discord-student-id").value.trim().toUpperCase();
-...
-if (!validateDiscordId(id)) return;
-setBtn(btnEl, true, "登録中…");
-try {
-  const result = await completeDiscordRegistration(dtoken, id, nickname);
-  if (result.ok) {
-    const palette = paletteFor(result.student.id);
-    saveSession(result.student, result.session_token, palette);
-    location.href = getRedirectTarget();
-    return;
+async function submitDiscordRegister() {
+  const dtoken   = document.getElementById("inp-dtoken").value;
+  const id       = document.getElementById("inp-discord-student-id").value.trim().toUpperCase();
+  const nickname = document.getElementById("inp-discord-nickname").value.trim();
+  const btnEl    = document.getElementById("btn-discord-reg-submit");
+
+  if (!validateDiscordId(id)) return;
+
+  setBtn(btnEl, true, "登録中…");
+
+  try {
+    const result = await completeDiscordRegistration(dtoken, id, nickname);
+
+    if (result.ok) {
+      const palette = paletteFor(result.student.id);
+      saveSession(result.student, result.session_token, palette);
+      location.href = getRedirectTarget();
+      return;
+    }
+
+    if (result.error === "nickname_required") {
+      showDiscordRegErr("ニックネームを入力してください");
+      return;
+    }
+    if (result.error === "reg_token_invalid") {
+      showDiscordRegErr("このリンクの有効期限が切れています。もう一度「Discordでログイン」からやり直してください。");
+      return;
+    }
+    showDiscordRegErr("登録に失敗しました。時間をおいて再試行してください。");
+  } catch {
+    showDiscordRegErr("サーバーに接続できません。時間をおいて再試行してください。");
+  } finally {
+    setBtn(btnEl, false, "登録してログイン " + Icons.html('check', {size:15}));
   }
-  if (result.error === "nickname_required") { showDiscordRegErr("ニックネームを入力してください"); return; }
-  if (result.error === "reg_token_invalid") { showDiscordRegErr("このリンクの有効期限が切れています。..."); return; }
-  showDiscordRegErr("登録に失敗しました。時間をおいて再試行してください。");
-} catch {
-  showDiscordRegErr("サーバーに接続できません。時間をおいて再試行してください。");
-} finally {
-  setBtn(btnEl, false, "登録してログイン " + Icons.html('check', {size:15}));
 }
 ```
 - 学籍番号は`.toUpperCase()`で大文字に統一してから送信します。
