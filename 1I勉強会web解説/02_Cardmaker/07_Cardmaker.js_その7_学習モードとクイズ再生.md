@@ -21,19 +21,29 @@ async function startSoloQuiz(deckId) {
 デッキの「▶プレイ」ボタンを押したときの入口です。
 
 ```js
-if (isDeckInFolderScope(deckId, QUIZ_ARCHIVE_FOLDER_ID) || deck.choiceMode) {
-  if (!deck.filename) return startSoloQuiz(deckId);
-  const choice = await showCmChoiceDialog({
-    title: deck.name,
-    choices: [
-      { icon: ..., label: '一人でプレイ', sub: '選択式クイズに一人で挑戦する', value: 'solo' },
-      { icon: ..., label: 'みんなでクイズを始める', sub: '友達とオンラインで早押し4択', value: 'multi' },
-    ],
-  });
-  if (choice === 'multi') return startQuizFromDeck(deckId);
-  if (choice === 'solo') return startSoloQuiz(deckId);
-  return;
-}
+async function openPlayMode(deckId) {
+  const deck = decks.find(d => d.id === deckId);
+  if (!deck) return;
+  // ★「クイズ過去問」フォルダの中のデッキ、および多肢選択デッキ（choiceMode有り）は、
+  //   通常のフラッシュカード（すべて/わからないだけ/続きから の選択モーダル）
+  //   ではなく、一人用選択式モードでプレイする。
+  //   ★ ただし公開済み（filenameあり）なら「みんなでクイズ」も選べるよう、
+  //     一人用選択式モーダルを出す前に軽く選ばせる（play-mode-itemと同じ見た目）。
+  if (isDeckInFolderScope(deckId, QUIZ_ARCHIVE_FOLDER_ID) || deck.choiceMode) {
+    if (!deck.filename) return startSoloQuiz(deckId);
+    const choice = await showCmChoiceDialog({
+      title: deck.name,
+      choices: [
+        { icon: Icons.cmHtml('choice', {size:20}), label: '一人でプレイ', sub: '選択式クイズに一人で挑戦する', value: 'solo' },
+        { icon: Icons.cmHtml('quiz', {size:20}), label: 'みんなでクイズを始める', sub: '友達とオンラインで早押し4択', value: 'multi' },
+      ],
+    });
+    if (choice === 'multi') return startQuizFromDeck(deckId);
+    if (choice === 'solo') return startSoloQuiz(deckId);
+    return; // キャンセル
+  }
+  studyIsFolder = false;
+  studyDeckId = deckId;
 ```
 - 「クイズ過去問」フォルダの中のデッキ、または多肢選択デッキは、通常のフラッシュカード学習（すべて/わからないだけ/続きから）ではなく、選択式（4択のような形式）の一人用クイズでプレイします。
 - 公開済みデッキであれば、その前に「一人でプレイ」か「みんなでクイズを始める」かを軽く選ばせます。非公開デッキは「みんなでクイズ」が使えない（後述）ため、この選択自体をスキップしていきなり一人用クイズを始めます。
@@ -41,22 +51,68 @@ if (isDeckInFolderScope(deckId, QUIZ_ARCHIVE_FOLDER_ID) || deck.choiceMode) {
 通常のフラッシュカードデッキの場合は、下に続く処理でプレイモード選択モーダル（`modal-play-mode`）を開く準備をします：
 
 ```js
-await waitForPendingSync(deckId);
-let result = await ensureDeckCardsLoaded(deckId, true);
-while (!result.ok) {
-  const retry = await showCmConfirm({ title: '読み込みに失敗しました', ... });
-  if (!retry) return;
-  result = await ensureDeckCardsLoaded(deckId, true);
-}
+  // ★ 修正：直前にカードを追加/削除した際のサーバー同期（queueSyncDeckToServer）が
+  //   まだ完了していない状態で強制リロードすると、その同期前の古い（最悪カード0枚の）
+  //   内容をサーバーから取得して上書きしてしまい、「中身があるのに0問で完了」に
+  //   なってしまう不具合があった。force reloadの前に必ず保留中の同期を待つ。
+  await waitForPendingSync(deckId);
+  // ★ 修正：1回失敗しただけで行き止まりのアラートを出して終わらせず、
+  //   loadDeckCardsWithRecovery と同様に「もう一度試す」を選べるようにする
+  //   （タイムアウトを含む一時的な通信エラーでプレイを諦めなくて済むように）。
+  let result = await ensureDeckCardsLoaded(deckId, true);
+  while (!result.ok) {
+    const retry = await showCmConfirm({
+      title: '読み込みに失敗しました',
+      desc: '通信環境を確認してもう一度お試しください。',
+      okLabel: 'もう一度試す', cancelLabel: 'やめる',
+    });
+    if (!retry) return;
+    result = await ensureDeckCardsLoaded(deckId, true);
+  }
 ```
 - ここでも「保留中の同期を待つ→強制的に最新カードを取得」という同じ順序が守られています。失敗した場合は、`while`ループで何度でも「もう一度試す」を選べるようにしています。
 
 ```js
-document.getElementById('play-mode-quiz-item').style.display = deck.filename ? '' : 'none';
+  document.getElementById('reverse-mode-checkbox').checked = false; // ★ プレイモード選択のたびに未チェックへリセット
+  document.getElementById('auto-grade-checkbox').checked = false; // ★ 追加：自動採点トグルも未チェックへリセット
+  onReverseModeToggleChange(); // ★ 追加：反転OFFなので自動採点トグルを表示状態にする
+  document.getElementById('play-mode-deck-name').textContent = deck.name;
+  document.getElementById('play-mode-all-sub').textContent = `${deck.cards.length} 問`;
+  const unsure = getUnsureSet(deckId);
+  const unsureCount = deck.cards.filter(c => unsure.has(cardKey(c))).length;
+  const unsureItem = document.getElementById('play-mode-unsure-item');
+  if (unsureCount > 0) {
+    document.getElementById('play-mode-unsure-sub').textContent = `${unsureCount} 問`;
+    unsureItem.style.display = '';
+  } else {
+    unsureItem.style.display = 'none';
+  }
+
+  // ★ 続きから再開できる場合は「続きから」の項目を表示する
+  const savedD = loadStudyProgress(false, deckId);
+  const resumeItemD = document.getElementById('play-mode-resume-item');
+  if (savedD) {
+    document.getElementById('play-mode-resume-sub').textContent = `${savedD.idx + 1} / ${savedD.order.length} 問から`;
+    resumeItemD.style.display = '';
+  } else {
+    resumeItemD.style.display = 'none';
+  }
+
+  // ★「みんなでクイズを始める」：公開済み（filenameあり）のデッキだけ表示する
+  //   （Quiz.jsはサーバーのget_card_setでデッキを取得するため、非公開のローカル限定
+  //   デッキは対象外）。
+  document.getElementById('play-mode-quiz-item').style.display = deck.filename ? '' : 'none';
+
+  // ★ 反転トグルを必ず見せるため、わからないカードの有無に関わらずモーダルを開く
+  openModal('modal-play-mode');
+}
 ```
 - 「みんなでクイズを始める」の項目は、公開済み（`filename`あり）のデッキだけに表示されます。コメントによれば、`Quiz.js`はサーバーの`get_card_set`でデッキを取得する仕組みのため、まだサーバーに登録されていない非公開のローカル限定デッキは対象にできないためです。
 
 ```js
+// ★ 追加：反転モードのON/OFFに応じて自動採点トグルの表示を切り替える。
+//   反転モード（問題と解答を逆にする）中は自動採点の対象がずれてしまうため、
+//   反転ONの間はトグル自体を隠し、内部的にもOFFへ強制的に戻しておく。
 function onReverseModeToggleChange() {
   const reversed = document.getElementById('reverse-mode-checkbox').checked;
   const row = document.getElementById('auto-grade-toggle-row');
@@ -68,64 +124,116 @@ function onReverseModeToggleChange() {
 
 ---
 
-## 3. 学習を開始する：`startStudyMode(mode)`（3849〜3939行）
+## 3. 学習を開始する：`startStudyMode(mode)`（3865〜3956行）
 
 `mode`は`'all'`（すべて）／`'unsure'`（わからないだけ）／`'resume'`（続きから）のいずれかです。
 
-### 3.1 「続きから」データの上書き確認（3855〜3869行）
 ```js
-if (mode !== 'resume') {
-  const existing = loadStudyProgress(studyIsFolder, progressId);
-  if (existing) {
-    const proceed = await showCmConfirm({
-      title: '「続きから」のデータが消えます',
-      desc: '保存されている再開位置は破棄され、最初からのプレイになります。\nこのまま始めますか？',
-      okLabel: 'このまま始める', cancelLabel: 'キャンセル', okStyle: 'danger',
-    });
-    if (!proceed) return;
+async function startStudyMode(mode) {
+  studyReverse = document.getElementById('reverse-mode-checkbox').checked;
+  // ★ 追加：自動採点は反転モードでない場合のみ有効にする（反転中はトグル自体を隠しているが念のため二重に保険）
+  studyAutoGrade = !studyReverse && document.getElementById('auto-grade-checkbox').checked;
+  const progressId = studyIsFolder ? studyFolderId : studyDeckId;
+```
+
+### 3.1 「続きから」データの上書き確認
+```js
+  // ★ 追加：「すべてのカード」「わからないカードだけ」を選んだ場合、
+  //   既に「続きから」の再開データが残っていると、この後の処理で
+  //   問答無用でそのデータが破棄されてしまう（clearStudyProgress）。
+  //   気づかないうちに再開位置が消えてしまわないよう、事前に確認する。
+  if (mode !== 'resume') {
+    const existing = loadStudyProgress(studyIsFolder, progressId);
+    if (existing) {
+      const proceed = await showCmConfirm({
+        title: '「続きから」のデータが消えます',
+        desc: '保存されている再開位置は破棄され、最初からのプレイになります。\nこのまま始めますか？',
+        okLabel: 'このまま始める', cancelLabel: 'キャンセル', okStyle: 'danger',
+      });
+      if (!proceed) return;
+    }
   }
-}
+
+  closeModal('modal-play-mode');
 ```
 - 「すべて」や「わからないだけ」を選んだ場合、これから始める処理（後述）が保存されていた「続きから」の再開データを問答無用で消してしまいます。気づかないうちに再開位置が失われてしまわないよう、事前に一言確認を挟んでいます。
 
-### 3.2 「続きから」を選んだ場合（3873〜3900行）
+### 3.2 「続きから」を選んだ場合
 ```js
-const saved = loadStudyProgress(studyIsFolder, progressId);
-if (!saved) return;
-studyReverse = saved.reverse;
-studyAutoGrade = !saved.reverse && !!saved.autoGrade;
-studyMode = saved.mode || 'all';
-studyShuffled = !!saved.shuffled;
+  if (mode === 'resume') {
+    // ★ 保存された進捗（カードキーの並び順・位置・モード・反転設定・シャッフル済みか）を復元する。
+    //   カード本体は常に最新の decks / folderPlayDecks から引き直すので、
+    //   編集や画像追加が続きから再開に影響しない。
+    const saved = loadStudyProgress(studyIsFolder, progressId);
+    if (!saved) return; // 万が一データが消えていた場合は何もしない
+    studyReverse = saved.reverse;
+    studyAutoGrade = !saved.reverse && !!saved.autoGrade; // ★ 追加：保存されていた自動採点設定を復元
+    studyMode = saved.mode || 'all';
+    studyShuffled = !!saved.shuffled; // ★ シャッフル済みだったかどうかを復元（タイトル表示用）
 
-let pool;
-if (studyIsFolder) { pool = []; folderPlayDecks.forEach(d => d.cards.forEach(c => pool.push({ ...c, __deckId: d.id }))); ... }
-else { const deck = decks.find(d => d.id === studyDeckId); pool = deck ? [...deck.cards] : []; ... }
-const byKey = new Map(pool.map(c => [cardKey(c), c]));
-studyCards = saved.order.map(k => byKey.get(k)).filter(Boolean);
-if (!studyCards.length) return;
-studyIdx = Math.min(saved.idx, studyCards.length - 1);
+    let pool;
+    if (studyIsFolder) {
+      pool = [];
+      folderPlayDecks.forEach(d => d.cards.forEach(c => pool.push({ ...c, __deckId: d.id })));
+      const folder = folders.find(f => f.id === studyFolderId);
+      studyBaseTitle = folder ? folder.name : 'フォルダ';
+    } else {
+      const deck = decks.find(d => d.id === studyDeckId);
+      pool = deck ? [...deck.cards] : [];
+      studyBaseTitle = deck ? deck.name : '';
+    }
+    const byKey = new Map(pool.map(c => [cardKey(c), c]));
+    // ★ order は保存時点の並び順（シャッフル済みならその並び）をそのまま記録しているので、
+    //   ここで単純にキーから引き直すだけで、シャッフルした状態のまま正しく再開できる。
+    studyCards = saved.order.map(k => byKey.get(k)).filter(Boolean);
+    if (!studyCards.length) return; // カードが全部消えていた場合は何もしない
+    studyIdx = Math.min(saved.idx, studyCards.length - 1);
 ```
 - 保存されていた「並び順（カードキーの配列）」を、**今の最新のカードデータ**から作った`Map`（キー→カード本体、の対応表）と突き合わせて、実際の学習カード配列（`studyCards`）を組み立て直します。こうすることで、保存後に他の人がカードを編集していても、その最新の内容で続きから再開できます。もし途中で削除されたカードがあれば`.filter(Boolean)`で自然に除外されます（`byKey.get(k)`が`undefined`になるため）。
 - `studyIdx = Math.min(saved.idx, studyCards.length - 1)`：もしカードが削除されて全体の枚数が減っていた場合でも、保存されていた位置が配列の範囲外にならないよう安全に調整しています。
 
-### 3.3 「すべて」「わからないだけ」を選んだ場合（3901〜3931行）
+### 3.3 「すべて」「わからないだけ」を選んだ場合
 ```js
-if (studyIsFolder) {
-  const merged = [];
-  folderPlayDecks.forEach(d => {
-    const unsure = mode === 'unsure' ? getUnsureSet(d.id) : null;
-    d.cards.forEach(c => {
-      if (mode === 'unsure' && !unsure.has(cardKey(c))) return;
-      merged.push({ ...c, __deckId: d.id });
-    });
-  });
-  studyCards = merged;
-  ...
-} else {
-  ...
+  } else {
+    studyMode = mode;
+    studyShuffled = false; // ★ 「すべて」「わからないだけ」を選び直した場合はシャッフル状態をリセット
+    if (studyIsFolder) {
+      // フォルダ内の全デッキのカードを、どのデッキ由来かのタグ付きでまとめる
+      const merged = [];
+      folderPlayDecks.forEach(d => {
+        const unsure = mode === 'unsure' ? getUnsureSet(d.id) : null;
+        d.cards.forEach(c => {
+          if (mode === 'unsure' && !unsure.has(cardKey(c))) return;
+          merged.push({ ...c, __deckId: d.id }); // ★ 元のデッキidを保持
+        });
+      });
+      studyCards = merged;
+      const folder = folders.find(f => f.id === studyFolderId);
+      studyBaseTitle = folder ? folder.name : 'フォルダ';
+    } else {
+      const deck = decks.find(d => d.id === studyDeckId);
+      if (mode === 'unsure') {
+        const unsure = getUnsureSet(studyDeckId);
+        studyCards = deck.cards.filter(c => unsure.has(cardKey(c)));
+      } else {
+        studyCards = [...deck.cards];
+      }
+      studyBaseTitle = deck.name;
+    }
+    studyIdx = 0;
+    // ★ 「すべて」「わからないだけ」を新しく選び直した場合は、
+    //   古い「続きから」データを破棄する（そのまま残すと内容と矛盾するため）
+    clearStudyProgress(studyIsFolder, progressId);
+  }
+
+  renderStudyTitle();
+  document.getElementById('study-done-sub').textContent = `全 ${studyCards.length} 問完了！`;
+  showScreen('study');
+  document.getElementById('study-done').style.display    = 'none';
+  document.getElementById('study-content').style.display = 'flex';
+  renderStudyCard();
+  loadUnderstandingBadge(); // ★ 追加：みんなの「わかる率」を右上に読み込む（非同期・表示はブロックしない）
 }
-studyIdx = 0;
-clearStudyProgress(studyIsFolder, progressId);
 ```
 - フォルダをまとめて学習している場合、各カードに`__deckId`（元々どのデッキに属していたか）を付け足しておきます。これは、フォルダ横断で1つの学習セッションとして扱いながらも、「このカードはどのデッキ由来か」を後から参照できるようにするための工夫です（学習画面での「わからない」マークの保存先や、カード編集時にどのデッキを更新すべきか、を判断するのに使われます）。
 - 新しく選び直した場合は、古い「続きから」のデータは矛盾するため`clearStudyProgress`で消しておきます。
@@ -140,19 +248,26 @@ clearStudyProgress(studyIsFolder, progressId);
 
 ---
 
-## 5. 学習カードの表示：`renderStudyCard()`（3958〜4052行）
+## 5. 学習カードの表示：`renderStudyCard()`（3981〜4068行）
 
-### 5.1 元の問題番号バッジ（3958〜3980行）
+### 5.1 元の問題番号バッジ（3974〜3996行）
 ```js
+// ★ 追加：プレイ中のカードが「元のデッキ順で何問目か」を、
+//   青色の「問題」ラベル（.study-q-tag）の横に番号だけ表示する。
+//   ─────────────────────────────────────────
+//   シャッフルすると study-prog-label（例:「3 / 20」）は再生順の位置に
+//   なってしまい、元の問題番号が分からなくなる。このバッジは常に
+//   元のデッキ内でのカード順（deck.cards内でのインデックス）の番号だけを表示する。
+//   バッジ要素はHTML側に無いので、初回はJSで動的に作って隣に挿入する。
 function updateStudyOriginalNumberBadge(c) {
   let badge = document.getElementById('study-orig-num-badge');
   if (!badge) {
     const label = document.querySelector('.study-q-tag');
-    if (!label) return;
+    if (!label) return; // 「問題」ラベルが見つからなければ何もしない
     badge = document.createElement('span');
     badge.id = 'study-orig-num-badge';
-    ...
-    label.appendChild(badge);
+    badge.style.cssText = 'margin-left:4px;';
+    label.appendChild(badge); // ★「問題」の文字のすぐ右（タグの中）に入れる
   }
   const deckId = c.__deckId || studyDeckId;
   const deck = decks.find(d => d.id === deckId);
@@ -164,79 +279,153 @@ function updateStudyOriginalNumberBadge(c) {
 - シャッフルすると、画面上の「3 / 20」のような進捗表示は「シャッフル後の再生順」の位置になってしまい、元々デッキの何問目だったかが分からなくなります。このバッジは、常に「元のデッキ内での並び順」の番号だけを別途表示するためのものです。
 - バッジ用の`<span>`要素はHTMLに最初から用意されているわけではなく、初回だけJSで動的に作って「問題」ラベルの隣に挿入し、以降は使い回します。
 
-### 5.2 学習完了時の処理（3982〜3995行）
 ```js
-if (studyIdx >= studyCards.length) {
-  document.getElementById('study-content').style.display = 'none';
-  document.getElementById('study-done').style.display    = 'flex';
-  ...
-  clearStudyProgress(studyIsFolder, progressId);
-  saveCompletionRecord(studyIsFolder, progressId, studyCards.length);
-  renderInProgressUI();
-  return;
-}
+function renderStudyCard() {
+  const progressId = studyIsFolder ? studyFolderId : studyDeckId;
+```
+
+### 5.2 学習完了時の処理
+```js
+  if (studyIdx >= studyCards.length) {
+    document.getElementById('study-content').style.display = 'none';
+    document.getElementById('study-done').style.display    = 'flex';
+    document.getElementById('study-prog-fill').style.width  = '100%';
+    document.getElementById('study-prog-label').textContent = `${studyCards.length} / ${studyCards.length}`;
+    const doneBadge = document.getElementById('study-orig-num-badge');
+    if (doneBadge) doneBadge.textContent = '';
+    clearStudyProgress(studyIsFolder, progressId); // ★ 完了したら続きデータは不要になるので消す
+    saveCompletionRecord(studyIsFolder, progressId, studyCards.length); // ★ 追加：完了したことを記録する
+    renderInProgressUI(); // ★ 追加：ホームの「プレイ中」「プレイ済み」欄を最新状態に更新
+    return;
+  }
 ```
 - 全部のカードを見終えたら、完了画面に切り替え、「続きから」のデータは不要になるので消し、代わりに「完了した」という記録（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の`saveCompletionRecord`）を残します。ホーム画面の「プレイ中」「プレイ済み」欄もここで最新化されます。
 
-### 5.3 通常のカード表示（3996〜4052行）
+### 5.3 通常のカード表示
 ```js
-const c = studyCards[studyIdx];
-markCardSeen(studyIsFolder ? c.__deckId : studyDeckId, c);
-const qText = studyReverse ? c.answer   : c.question;
-...
+  const c = studyCards[studyIdx];
+  markCardSeen(studyIsFolder ? c.__deckId : studyDeckId, c); // ★ 追加：みんなの「わかる率」用に学習済み記録
+
+  // ★ 反転モードなら「問題」欄に解答、「解答」欄に問題文を出す（解説はそのまま解答側に表示）
+  const qText = studyReverse ? c.answer   : c.question;
+  const qImgs = studyReverse ? c.imgs_a   : c.imgs_q;
+  const aText = studyReverse ? c.question : c.answer;
+  const aImgs = studyReverse ? c.imgs_q   : c.imgs_a;
+
+  setMathText(document.getElementById('study-q-text'), qText);
+  renderImgList(document.getElementById('study-q-imgs'), qImgs);
+  // ★ フォルダをまとめてプレイしている場合、この問題がどのカードデッキ由来かを表示する
+  const deckTag = document.getElementById('study-deck-tag');
+  if (studyIsFolder) {
+    const srcDeck = decks.find(d => d.id === c.__deckId);
+    if (srcDeck) {
+      setIconText(deckTag, Icons.html('cardmaker', {size:14}), srcDeck.name);
+      deckTag.style.display = '';
+    } else {
+      deckTag.style.display = 'none';
+    }
+  } else {
+    deckTag.style.display = 'none';
+  }
+  document.getElementById('study-answer-panel').classList.remove('show');
+  document.getElementById('study-reveal-bar').style.display = 'flex';
+  document.getElementById('study-nav').style.display = 'none';
 ```
 - カードを表示するたびに`markCardSeen`（「みんなのわかる率」用の学習済み記録、[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)）を呼びます。
 - 反転モードなら問題欄と解答欄の中身を入れ替えて表示します。
 
 ```js
-const answerInputWrap = document.getElementById('study-answer-input-wrap');
-answerInputWrap.style.display = '';
-answerInput.value = '';
-...
-document.getElementById('reveal-answer-btn').textContent = studyAutoGrade ? '採点する' : '答えを見る';
+  // ★ 修正：解答入力欄は反転モードかどうかに関わらず常に表示する（自問自答の確認用）。
+  //   反転モード中は studyAutoGrade が常に false になる（onReverseModeToggleChange /
+  //   startStudyMode 側で強制）ため、ここで欄を表示していても自動採点（○×判定）は
+  //   行われない。あくまで「入力欄を使って自分で書いてみる」ことだけができる。
+  const answerInputWrap = document.getElementById('study-answer-input-wrap');
+  const answerInput = document.getElementById('study-answer-input');
+  answerInputWrap.style.display = '';
+  answerInput.value = '';
+  const gradeResult = document.getElementById('study-grade-result');
+  gradeResult.style.display = 'none';
+  gradeResult.className = 'study-grade-result';
+  document.getElementById('reveal-answer-btn').textContent = studyAutoGrade ? '採点する' : '答えを見る';
+
+  setMathText(document.getElementById('study-a-text'), aText);
+  renderImgList(document.getElementById('study-a-imgs'), aImgs);
+  const explWrap = document.getElementById('study-expl-wrap');
+  if (c.explanation) { setMathText(document.getElementById('study-e-text'), c.explanation); explWrap.style.display = ''; }
+  else { explWrap.style.display = 'none'; }
+  const pct = studyCards.length > 1 ? (studyIdx/(studyCards.length-1))*100 : 100;
+  document.getElementById('study-prog-fill').style.width  = pct + '%';
+  document.getElementById('study-prog-label').textContent = `${studyIdx+1} / ${studyCards.length}`;
+  updateStudyOriginalNumberBadge(c); // ★ 追加：シャッフル時も元の問題番号がわかるように表示
 ```
 - コメントによれば、解答入力欄は反転モードかどうかに関わらず**常に**表示されます。反転モード中は自動採点自体が行われませんが（`studyAutoGrade`が常に`false`になるよう別の場所で強制されている）、入力欄自体は「自分で書いてみて確認する」という使い方ができるよう、あえて隠していません。
 
 ```js
-document.getElementById('study-next').innerHTML = studyIdx === studyCards.length-1 ? ('完了 ' + Icons.html('check', {size:14})) : '次へ →';
-updateUnsureBtn();
-saveStudyProgress();
+  // ★ 答えを見る前・見た後、両方の「前へ」ボタンの有効/無効を同期
+  document.getElementById('study-prev').disabled     = studyIdx === 0;
+  document.getElementById('study-prev-pre').disabled = studyIdx === 0;
+  document.getElementById('study-next').innerHTML = studyIdx === studyCards.length-1 ? ('完了 ' + Icons.html('check', {size:14})) : '次へ →';
+  updateUnsureBtn();
+  saveStudyProgress(); // ★ カードを表示するたびに現在位置を保存し、次回「続きから」を出せるようにする
+}
 ```
 - 最後のカードなら「次へ」ボタンの文言を「完了」に変え、「わからない」ボタンの見た目を更新し、**カードを表示するたびに毎回**`saveStudyProgress()`（学習の続きを保存）を呼びます。これにより、学習中にアプリを閉じても、次に開いたときにちょうど今見ていたカードから再開できます。
 
 ---
 
-## 6. 答えを見る・自動採点（4054〜4097行）
+## 6. 答えを見る・自動採点（4070〜4113行）
 
 ```js
 function revealAnswer() {
   document.getElementById('study-answer-panel').classList.add('show');
   document.getElementById('study-reveal-bar').style.display = 'none';
   document.getElementById('study-nav').style.display = '';
-  if (studyAutoGrade) gradeCurrentAnswer();
+  if (studyAutoGrade) gradeCurrentAnswer(); // ★ 追加：自動採点モードなら○×判定を行う
   updateUnsureBtn();
 }
 ```
 - 「答えを見る」（自動採点モードなら「採点する」）ボタンが押されたときの処理です。自動採点モードなら`gradeCurrentAnswer()`で判定を行います。
 
 ```js
-function normalizeAnswerText(s) { return (s || '').toLowerCase().replace(/[\s　]/g, ''); }
+// ★ 追加：自動採点まわりの処理
+//   ─────────────────────────────────────────
+//   入力欄の解答と正解テキストを正規化（前後の空白・全角スペースを除去し小文字化）して比較し、
+//   一致していれば○正解、そうでなければ×不正解と判定する。
+//   ×だった場合は自動で「わからない」にマークする（既にマーク済みなら何もしない）。
+//   ○だった場合は既存の「わからない」マークを勝手に外したりはしない。
+function normalizeAnswerText(s) {
+  return (s || '').toLowerCase().replace(/[\s　]/g, '');
+}
 function gradeCurrentAnswer() {
   const card = studyCards[studyIdx];
-  const input = ...;
-  const correctText = studyReverse ? card.question : card.answer;
+  if (!card) return;
+  const inputEl = document.getElementById('study-answer-input');
+  const input = inputEl ? inputEl.value : '';
+  const correctText = studyReverse ? card.question : card.answer; // 自動採点は反転モードでは使わない想定だが念のため
   const normInput = normalizeAnswerText(input);
   const isCorrect = normInput !== '' && normInput === normalizeAnswerText(correctText);
-  ...
+
+  const result = document.getElementById('study-grade-result');
+  const mark = document.getElementById('grade-mark');
+  const userAnswerEl = document.getElementById('grade-user-answer');
+  result.style.display = 'flex';
+  result.className = 'study-grade-result ' + (isCorrect ? 'correct' : 'incorrect');
+  mark.innerHTML = isCorrect ? '○ 正解' : (Icons.html('close', {size:14}) + ' 不正解');
+  userAnswerEl.textContent = 'あなたの解答：' + (input.trim() ? input : '（未入力）');
+
   if (!isCorrect) {
     const key = cardKey(card);
     const deckId = card.__deckId || studyDeckId;
     const unsure = getUnsureSet(deckId);
-    if (!unsure.has(key)) { unsure.add(key); saveUnsureSet(deckId, unsure); }
+    if (!unsure.has(key)) {
+      unsure.add(key);
+      saveUnsureSet(deckId, unsure);
+    }
   }
 }
 ```
 - `normalizeAnswerText`は、比較の前に「小文字化」＋「半角/全角スペースの除去（`\s`が半角の空白、`　`が全角スペースの文字コード）」を行う関数です。これにより、大文字/小文字の違いや余分な空白があっても、内容が同じなら正解と判定できるようにしています（逆に言うと、これ以外の表記ゆれ、例えば送り仮名の違いなどは不正解と判定されます）。
+- 正解/不正解の見た目（○/×マーク・入力した内容の表示）もここで組み立てています。
 - **不正解だった場合は自動的に「わからない」マークが付きます**（すでに付いていれば何もしません）。逆に正解だったからといって、既存の「わからない」マークを勝手に外すことはしません（コメントにその方針が明記されています）。
 
 ---
@@ -263,8 +452,13 @@ function shuffleStudy() {
     [studyCards[i],studyCards[j]]=[studyCards[j],studyCards[i]];
   }
   studyIdx = 0;
-  studyShuffled = true;
-  ...
+  studyShuffled = true; // ★ 追加：シャッフル済み状態にする。以降の saveStudyProgress で保存され、
+                        //   「続きから」で再開したときもこのシャッフル順のまま復元される。
+  renderStudyTitle(); // ★ タイトルにシャッフル中を表示（studyShuffledは直前にtrueへ更新済み）
+  document.getElementById('study-done').style.display    = 'none';
+  document.getElementById('study-content').style.display = 'flex';
+  renderStudyCard();
+  saveStudyProgress(); // ★ 念のため即座に保存しておく（renderStudyCard内でも保存されるが二重に確実化）
 }
 ```
 - カードをシャッフルする、標準的な「Fisher-Yatesシャッフル」というアルゴリズムです。配列の末尾から順に、「まだ確定していない範囲」からランダムに1つ選んで入れ替える、という操作を繰り返すことで、偏りのない完全なランダム順を作ります。`[a, b] = [b, a]`という書き方は、JSで2つの変数の値を入れ替える定番の書き方（配列の分割代入を利用したテクニック）です。
