@@ -14,7 +14,13 @@ def quiz_list_rooms():
       一覧に出しっぱなしにする（終了するまで一覧から消えない）。
     ・"ended"（終了）になったルームだけ一覧から外す。
     """
-    ...
+    guild_id = request.args.get("guild_id")
+    if not guild_id:
+        return jsonify({"ok": False, "error": "missing guild_id"})
+    guild_id = int(guild_id)
+    student_id, err = require_member_session(session_token_from_request(), guild_id)
+    if err:
+        return err
     now = time.time()
     with QUIZ_ROOMS_LOCK:
         _quiz_gc_locked(now)
@@ -47,7 +53,12 @@ def quiz_list_rooms():
 ```python
 @app.route("/quiz_join", methods=["POST"])
 def quiz_join():
-    ...
+    data, guild_id, student_id, nickname, err = _quiz_auth_from_json()
+    if err:
+        return err
+    code = (data.get("code") or "").strip().upper()
+
+    now = time.time()
     with QUIZ_ROOMS_LOCK:
         _quiz_gc_locked(now)
         room, err = _quiz_get_room_or_error(code)
@@ -79,7 +90,16 @@ def quiz_join():
 ```python
 @app.route("/quiz_state", methods=["GET"])
 def quiz_state():
-    ...
+    guild_id = request.args.get("guild_id")
+    if not guild_id:
+        return jsonify({"ok": False, "error": "missing guild_id"})
+    guild_id = int(guild_id)
+    student_id, err = require_member_session(session_token_from_request(), guild_id)
+    if err:
+        return err
+    code = (request.args.get("code") or "").strip().upper()
+
+    now = time.time()
     with QUIZ_ROOMS_LOCK:
         _quiz_gc_locked(now)
         room, err = _quiz_get_room_or_error(code)
@@ -102,7 +122,12 @@ def quiz_state():
 ```python
 @app.route("/quiz_start", methods=["POST"])
 def quiz_start():
-    ...
+    data, guild_id, student_id, nickname, err = _quiz_auth_from_json()
+    if err:
+        return err
+    code = (data.get("code") or "").strip().upper()
+
+    now = time.time()
     with QUIZ_ROOMS_LOCK:
         room, err = _quiz_get_room_or_error(code)
         if err:
@@ -111,15 +136,24 @@ def quiz_start():
             return jsonify({"ok": False, "error": "not_host"})
         if room["state"] != "lobby":
             return jsonify({"ok": False, "error": "quiz_already_started"})
+        # ★ 変更：いきなり出題(question)にはせず、まず"countdown"
+        #   （5,4,3,2,1のカウントダウン）→"intro"（「第1問」表示）を挟む。
+        #   実際の制限時間のカウントは、intro表示が終わってから始まる
+        #   （_quiz_autoadvance_locked参照）。
         room["state"] = "countdown"
         room["current_q"] = 0
         room["countdown_started_at"] = now
-        ...
+        room["intro_started_at"] = None
+        room["question_started_at"] = None
+        room["reveal_started_at"] = None
+        room["first_correct_id"] = None
+        room["first_correct_nickname"] = None
         for p in room["players"].values():
             p["cur_answer"] = None
             p["cur_correct"] = None
         room["last_activity"] = now
         snap = _quiz_room_snapshot(room, student_id)
+    # ★ 遅延低減：カウントダウン開始を、他の端末のポーリング待ちなしで即座に知らせる
     notify_change(guild_id)
     return jsonify({"ok": True, "room": snap, "server_now": int(now * 1000)})
 ```
@@ -132,11 +166,15 @@ def quiz_start():
 ```python
 @app.route("/quiz_answer", methods=["POST"])
 def quiz_answer():
-    ...
+    data, guild_id, student_id, nickname, err = _quiz_auth_from_json()
+    if err:
+        return err
+    code = (data.get("code") or "").strip().upper()
     choice_index = data.get("choice_index")
     if not isinstance(choice_index, int) or isinstance(choice_index, bool) or not (0 <= choice_index < 4):
         return jsonify({"ok": False, "error": "invalid_choice"})
 
+    now = time.time()
     with QUIZ_ROOMS_LOCK:
         room, err = _quiz_get_room_or_error(code)
         if err:
@@ -175,7 +213,12 @@ def quiz_answer():
 ```python
 @app.route("/quiz_end", methods=["POST"])
 def quiz_end():
-    ...
+    data, guild_id, student_id, nickname, err = _quiz_auth_from_json()
+    if err:
+        return err
+    code = (data.get("code") or "").strip().upper()
+
+    now = time.time()
     with QUIZ_ROOMS_LOCK:
         room, err = _quiz_get_room_or_error(code)
         if err:
@@ -196,7 +239,11 @@ def quiz_end():
 ```python
 @app.route("/quiz_leave", methods=["POST"])
 def quiz_leave():
-    ...
+    data, guild_id, student_id, nickname, err = _quiz_auth_from_json()
+    if err:
+        return err
+    code = (data.get("code") or "").strip().upper()
+
     with QUIZ_ROOMS_LOCK:
         room, err = _quiz_get_room_or_error(code)
         if err:

@@ -30,14 +30,28 @@ def _quiz_room_players_json(room, include_correct=False):
 ```python
 def _quiz_room_snapshot(room, student_id):
     snap = {
-        "code": room["code"], "title": room["title"], "state": room["state"],
-        "host_nickname": room["host_nickname"], "players": _quiz_room_players_json(room),
+        "code": room["code"],
+        "title": room["title"],
+        "state": room["state"],
+        "host_nickname": room["host_nickname"],
+        "players": _quiz_room_players_json(room),
     }
     if room["state"] == "countdown":
-        snap.update({"current_q": ..., "total_questions": ..., "countdown_started_at": ..., "countdown_duration_sec": QUIZ_COUNTDOWN_DURATION_SEC})
+        snap.update({
+            "current_q": room["current_q"],
+            "total_questions": len(room["questions"]),
+            "countdown_started_at": room["countdown_started_at"],
+            "countdown_duration_sec": QUIZ_COUNTDOWN_DURATION_SEC,
+        })
     elif room["state"] == "intro":
         # ★ 「第N問」表示中は、まだ問題文・選択肢は渡さない
-        snap.update({"current_q": ..., "total_questions": ..., "intro_started_at": ..., "intro_duration_sec": QUIZ_INTRO_DURATION_SEC})
+        #   （question状態になってから渡せば十分で、渡す情報は少ない方がよい）。
+        snap.update({
+            "current_q": room["current_q"],
+            "total_questions": len(room["questions"]),
+            "intro_started_at": room["intro_started_at"],
+            "intro_duration_sec": QUIZ_INTRO_DURATION_SEC,
+        })
 ```
 - `"intro"`（「第N問」を見せている段階）では、**まだ問題文や選択肢自体を渡していません**。コメントにある通り「question状態になってから渡せば十分で、渡す情報は少ない方がよい」という、最小限の情報しか渡さない方針です。
 
@@ -47,13 +61,24 @@ def _quiz_room_snapshot(room, student_id):
         revealed = room["state"] == "reveal"
         question_payload = {"question": q["question"], "choices": q["choices"]}
         # ★ 正解番号は、発表(reveal)されるまでは誰にも渡さない（レスポンスを
-        #   devtools等で覗かれてカンニングされるのを防ぐ）。
+        #   devtools等で覗かれてカンニングされるのを防ぐ）。ホストも今は
+        #   1プレイヤーとして参加するため、ホストだけ特別扱いはしない。
         if revealed:
             question_payload["correct_index"] = q["correct_index"]
-        snap.update({..., "question": question_payload, ...})
+        snap.update({
+            "current_q": room["current_q"],
+            "total_questions": len(room["questions"]),
+            "question": question_payload,
+            "question_started_at": room["question_started_at"],
+            "time_limit_sec": room["time_limit_sec"],
+            "answered_count": sum(1 for p in room["players"].values() if p["cur_answer"] is not None),
+            "total_players": len(room["players"]),
+        })
         if revealed:
             snap["first_correct_nickname"] = room.get("first_correct_nickname")
-            ...
+            snap["reveal_started_at"] = room.get("reveal_started_at")
+            snap["reveal_duration_sec"] = QUIZ_REVEAL_DURATION_SEC
+            # ★ 発表中だけ、全員分の正誤(◯×)を含めて players を上書きする
             snap["players"] = _quiz_room_players_json(room, include_correct=True)
         player = room["players"].get(student_id)
         if player is not None and player["cur_answer"] is not None:
@@ -105,7 +130,9 @@ def _build_deck_questions(deck_filenames, num_questions):
     (questions, error_code) を返す（成功時 error_code は None）。"""
     if isinstance(deck_filenames, str):
         deck_filenames = [deck_filenames]
-    ...
+    if not isinstance(deck_filenames, list) or not deck_filenames:
+        return None, "deck_not_found"
+    # ★ 重複を除きつつ順序は維持する
     seen_filenames = set()
     deck_filenames = [f for f in deck_filenames if not (f in seen_filenames or seen_filenames.add(f))]
     if len(deck_filenames) > QUIZ_MAX_SOURCE_DECKS:
@@ -201,33 +228,59 @@ def _archive_manual_quiz(title, questions, student_id, nickname):
     ★ ホストが「自分で問題を作る」（オリジナル4択）で作成したクイズを、
       CardMakerの「クイズ過去問」フォルダにデッキとして自動保存する。
       いつでも一人用選択式モードで遊べる「過去問」として残すため。
+      呼び出し元は _archive_room_if_needed()（クイズが終了した時点で呼ばれる）。
+    ・questions は _validate_manual_questions の戻り値そのもの
+      （[{"question", "choices"(4件), "correct_index"}, ...]）。
+    ・choice_mode/choices/correct_indices は、CardMaker側の選択式デッキ共通
+      フォーマット。単一/複数正解はデッキ単位ではなく問題ごとに
+      correct_indices の個数で決まる（CardMaker側の仕様）。Quiz.js自体は
+      4択・単一正解の固定フォーマットのままで、ここでの変換にしか影響しない。
+    ・answer（正解の選択肢文言）も入れておく。これにより単語検索・一覧表示・
+      作成済みリストなど、「answerは文字列である」という前提の既存コードを
+      一切変更せずに動かせる（choices/correct_indices は選択式UIだけが見る）。
     ・アーカイブに失敗しても、クイズ自体の進行は失敗させない（ベストエフォート）。
     """
     try:
         _ensure_quiz_archive_folder()
         cards = [{
-            "id": secrets.token_hex(6), "question": q["question"],
-            "answer": q["choices"][q["correct_index"]], "choices": q["choices"],
-            "correct_indices": [q["correct_index"]], "explanation": "",
+            "id": secrets.token_hex(6),
+            "question": q["question"],
+            "answer": q["choices"][q["correct_index"]],
+            "choices": q["choices"],
+            "correct_indices": [q["correct_index"]],
+            "explanation": "",
             "imgs_q": [], "imgs_a": [], "imgs_e": [],
         } for q in questions]
         filename = generate_card_filename()
         card_payload = {
-            "name": title, "cards": cards, "subject": None,
+            "name": title,
+            "cards": cards,
+            "subject": None,
             "folder_id": QUIZ_ARCHIVE_FOLDER_ID,
             "published_by": {"id": student_id, "nickname": nickname},
-            "incomplete": False, "choice_mode": True,
+            "incomplete": False,
+            "choice_mode": True,  # ★ 選択式デッキであることのマーカー（単一/複数は問題ごとにcorrect_indicesの個数で決まる）
+            "quiz_archive": True,  # ★ 追加（2026/08/21）：クイズ過去問デッキであることのマーカー。
+            # フォルダ位置に依存させると、フォルダの外へ移動できるようにした際に
+            # 判定できなくなる（save_cardsが問題編集を禁止する対象の特定にも使う）ため、
+            # デッキ自身に持たせる。
         }
         put_card_file(filename, card_payload)
         index_change = upsert_cards_index_entry(filename, card_payload)
         change = deck_file_diff(f"{CARDS_DIR}/{filename}", None, card_payload)
-        ...
-        log_event("card", f"みんなでクイズの結果を「{title}」として「クイズ過去問」に保存しました（{len(cards)}問）。", ...)
+        detail = [c for c in (change, index_change) if c]
+        log_event(
+            "card",
+            f"みんなでクイズの結果を「{title}」として「クイズ過去問」に保存しました（{len(cards)}問）。",
+            actor=nickname,
+            detail=detail if detail else None,
+        )
     except Exception as e:
         print(f"[WARN] クイズ過去問の保存に失敗しました（クイズの進行自体は続行）: {e}")
 ```
 - **CardMakerとクイズという、2つの独立した機能が繋がる面白い箇所です**。ホストが手作りしたオリジナルのクイズ問題を、クイズが終わった後に**自動的にCardMakerのデッキとして保存**し、いつでも一人用の選択式モードで復習できるようにしています。
 - `answer`フィールドにも正解の選択肢文言を入れている理由がコメントに書かれています：「これにより単語検索・一覧表示・作成済みリストなど、『answerは文字列である』という前提の既存コードを一切変更せずに動かせる」。CardMaker側の多くの機能は、通常のフラッシュカードデッキ（`answer`が単純な文字列）を前提に作られています。選択式デッキという新しい概念を追加するにあたり、既存のコードを大きく書き換えるのではなく、**選択式デッキも`answer`フィールドだけは互換性のために律儀に埋めておく**ことで、既存の機能をそのまま動かし続けられるようにする、という実務的な工夫です。
+- **`quiz_archive: True`（2026/08/21追加）**… このデッキが「クイズ過去問」由来であることを示す専用フラグです。[../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)・[../18_FlaskAPI_カードフォルダと並び順/00_フォルダのツリー構造と操作API.md](../18_FlaskAPI_カードフォルダと並び順/00_フォルダのツリー構造と操作API.md)で詳しく解説していますが、以前はこの性質を`folder_id`（フォルダの位置）だけで判定していました。ユーザーの要望で「デッキを他のフォルダへ移動できるようにしたいが、問題の編集はできないままにしたい」という仕様に変わったのに伴い、位置に依存しないこの専用フィールドへ切り替わっています。
 
 ```python
 def _archive_room_if_needed(room):
