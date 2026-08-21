@@ -39,13 +39,37 @@ function updateTimerUI() {
 ```js
 async function timerApiState() {
   try {
-    return await api("/timer_state?guild_id=" + GUILD_ID, { headers: { "Authorization": "Bearer " + SESSION_TOKEN } });
+    // ★ session_tokenはURLクエリに載せない（ブラウザ履歴・アクセスログ・Refererに
+    //   残るリスクがあるため）。Authorizationヘッダで送る。
+    return await api("/timer_state?guild_id=" + GUILD_ID, {
+      headers: { "Authorization": "Bearer " + SESSION_TOKEN },
+    });
   } catch(e) { return null; }
 }
-async function timerApiStart()  { ... "/timer_start"  ... }
-async function timerApiPause()  { ... "/timer_pause"  ... }
-async function timerApiResume() { ... "/timer_resume" ... }
-async function timerApiStop()   { ... "/timer_stop"   ... }
+async function timerApiStart() {
+  try {
+    return await api("/timer_start", { method: "POST",
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN }) });
+  } catch(e) { return null; }
+}
+async function timerApiPause() {
+  try {
+    return await api("/timer_pause", { method: "POST",
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN }) });
+  } catch(e) { return null; }
+}
+async function timerApiResume() {
+  try {
+    return await api("/timer_resume", { method: "POST",
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN }) });
+  } catch(e) { return null; }
+}
+async function timerApiStop() {
+  try {
+    return await api("/timer_stop", { method: "POST",
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN }) });
+  } catch(e) { return null; }
+}
 ```
 - タイマーの5つの状態変化（今の状態を聞く・開始・一時停止・再開・停止）に対応する、5つのAPI呼び出し関数です。すべて通信が失敗したら`null`を返すだけの、シンプルな薄いラッパーです。
 - `timerApiState`だけ`headers`を明示的に指定していますが、これは`GET`リクエストなので`api()`の第2引数（`opts`）が持つデフォルトの`Authorization`付与に頼らず、念のため明示している形です（コメントには「`session_token`はURLクエリに載せない」という、[../02_Cardmaker/06_Cardmaker.js_その6_カード編集と学習データ同期.md](../02_Cardmaker/06_Cardmaker.js_その6_カード編集と学習データ同期.md)でも見た同じ理由が書かれています）。
@@ -162,52 +186,121 @@ function notifyUserBrowserOnly(title, body) {
 
 ### 7.1 `timerStart()`（1415〜1453行）
 ```js
-if (timerRunning || timerIsPaused) return;
-ensureNotifyPermission();
-var btn = document.getElementById("btn-start");
-if (btn) btn.disabled = true;
-var res = await timerApiStart();
-if (!res || res.ok === false) {
-  if (res && res.error === "not_logged_in") { forceReLogin(); return; }
-  if (res && res.error === "already_paused") {
-    // ★ 他の端末で既に一時停止中（3時間経過での自動休憩を含む） → こちらもその状態に合わせる
-    applyServerTimerState(res);
-    ...
+async function timerStart() {
+  if (timerRunning || timerIsPaused) return;
+  ensureNotifyPermission(); // ★ ユーザー操作（クリック）のタイミングで許可をリクエスト
+  var btn = document.getElementById("btn-start");
+  if (btn) btn.disabled = true; // ★ 連打防止（応答が返るまで）
+
+  var res = await timerApiStart();
+
+  if (!res || res.ok === false) {
+    if (res && res.error === "not_logged_in") { forceReLogin(); return; }
+    if (res && res.error === "already_paused") {
+      // ★ 他の端末で既に一時停止中（3時間経過での自動休憩を含む） → こちらもその状態に合わせる
+      applyServerTimerState(res);
+      document.getElementById("btn-start").disabled = true;
+      document.getElementById("btn-pause").disabled  = false;
+      document.getElementById("btn-stop").disabled   = false;
+      document.getElementById("btn-pause").textContent    = "▶ 再開";
+      document.getElementById("timer-status").textContent =
+        res.pause_reason === "checkpoint"
+          ? "休憩中...（3時間経過したため自動的に休憩にしました。再開すると続きから計測できます）"
+          : "休憩中...（他の端末で開始された記録に接続しました）";
+      updateTimerUI();
+      startSyncPolling();
+      return;
+    }
+    if (btn) btn.disabled = false;
+    showAppAlert({ title: "通信エラーのためタイマーを開始できませんでした", desc: "もう一度お試しください。" });
     return;
   }
-  ...
+
+  applyServerTimerState(res);
+  document.getElementById("btn-start").disabled = true;
+  document.getElementById("btn-pause").disabled = false;
+  document.getElementById("btn-stop").disabled  = false;
+  document.getElementById("btn-pause").textContent = "⏸ 休憩";
+  document.getElementById("timer-status").textContent =
+    res.joined ? "計測中...（他の端末で開始された記録に接続しました）" : "計測中...";
+  startInterval();
 }
-applyServerTimerState(res);
-...
-document.getElementById("timer-status").textContent = res.joined ? "計測中...（他の端末で開始された記録に接続しました）" : "計測中...";
-startInterval();
 ```
 - `res.error === "already_paused"`という特別なケースが用意されています。これは、実は別の端末で既にタイマーが動いていて（あるいは3時間経過で自動休憩中で）、この端末から「開始」しようとしても、サーバー側は「新しく始める」のではなく「既存の記録に接続する」動きをする、ということを意味しています。`res.joined`（新規開始ではなく、既存の記録に合流した）というフラグも用意されており、表示メッセージをそれに応じて変えています。
 
 ### 7.2 `timerPauseResume()`（1455〜1492行）
 今の状態（`timerIsPaused`）に応じて、休憩にするか再開するかを切り替えます。休憩にする処理でサーバーとの同期に失敗した場合、
 ```js
-var st = await timerApiState();
-if (st && st.ok) applyServerTimerState(st);
-startInterval();
+async function timerPauseResume() {
+  if (!timerRunning && !timerIsPaused) return;
+  var btn = document.getElementById("btn-pause");
+  if (btn) btn.disabled = true; // ★ 連打防止（応答が返るまで）
+
+  if (!timerIsPaused) {
+    // 休憩する
+    clearInterval(timerInterval); timerInterval = null;
+    var res = await timerApiPause();
+    if (!res || res.ok === false) {
+      if (res && res.error === "not_logged_in") { forceReLogin(); return; }
+      // サーバーとの同期に失敗した場合は最新状態を取り直して表示だけ合わせる
+      var st = await timerApiState();
+      if (st && st.ok) applyServerTimerState(st);
+      startInterval();
+      if (btn) btn.disabled = false;
+      return;
+    }
+    applyServerTimerState(res);
+    document.getElementById("btn-pause").textContent      = "▶ 再開";
+    document.getElementById("timer-status").textContent   = "休憩中...";
+    document.getElementById("timer-pts-hint").textContent = "";
+  } else {
+    // 再開する
+    var res2 = await timerApiResume();
+    if (!res2 || res2.ok === false) {
+      if (res2 && res2.error === "not_logged_in") { forceReLogin(); return; }
+      showAppAlert({ title: "通信エラーのため再開できませんでした", desc: "もう一度お試しください。" });
+      if (btn) btn.disabled = false;
+      return;
+    }
+    applyServerTimerState(res2);
+    document.getElementById("btn-pause").textContent    = "⏸ 休憩";
+    document.getElementById("timer-status").textContent = "計測中...";
+    startInterval();
+  }
+  if (btn) btn.disabled = false;
+}
 ```
 - 単にエラーを表示するだけでなく、**改めてサーバーに今の本当の状態を聞き直して**表示を合わせ直す、という丁寧な回復処理が入っています。
 
 ### 7.3 `timerStop()`（1494〜1520行）
 ```js
-var wasRunning = timerRunning;
-timerRunning = false; timerIsPaused = true;
-if (wasRunning) { var res = await timerApiPause(); if (res && res.ok) applyServerTimerState(res); }
-startSyncPolling();
-var mins = Math.floor(timerSec / 60);
-if (mins < 1) {
-  await showAppAlert({ title: "1分未満のため記録できません" });
-  timerApiStop();
-  timerReset(); return;
+async function timerStop() {
+  clearInterval(timerInterval); timerInterval = null;
+  var wasRunning = timerRunning;
+  timerRunning = false; timerIsPaused = true;
+
+  // ★ ここではまだ保存/破棄が決まっていないため、サーバー側の記録は
+  //   すぐに消さず「一時停止」扱いで経過時間だけ確定させておく。
+  //   これにより他の端末には「一時停止しました」と正しく伝わり、
+  //   計測中の表示が理由もなく途中でリセットされるのを防げる。
+  //   （実際にサーバー側の記録を消すのは、保存 or 破棄が確定した時）
+  if (wasRunning) {
+    var res = await timerApiPause();
+    if (res && res.ok) applyServerTimerState(res);
+  }
+  startSyncPolling(); // ★ 確認画面を見ている間も、他端末での保存/破棄を検知できるようにする
+
+  var mins = Math.floor(timerSec / 60);
+  if (mins < 1) {
+    await showAppAlert({ title: "1分未満のため記録できません" });
+    timerApiStop(); // 記録として残す価値が無いので、ここでサーバー側もクリアする
+    timerReset(); return;
+  }
+  document.getElementById("timer-main").style.display    = "none";
+  document.getElementById("timer-confirm").style.display = "block";
+  document.getElementById("conf-time").textContent       = mins + "分 " + pad(timerSec % 60) + "秒";
+  document.getElementById("conf-time").dataset.min       = mins;
 }
-document.getElementById("timer-main").style.display    = "none";
-document.getElementById("timer-confirm").style.display = "block";
-...
 ```
 - コメントに重要な設計判断が書かれています：「ここではまだ保存/破棄が決まっていないため、サーバー側の記録はすぐに消さず『一時停止』扱いで経過時間だけ確定させておく。これにより他の端末には『一時停止しました』と正しく伝わり、計測中の表示が理由もなく途中でリセットされるのを防げる。実際にサーバー側の記録を消すのは、保存または破棄が確定した時」。「ストップ」ボタンを押した直後は、確認画面（保存するか、破棄するか、まだ迷える状態）に過ぎないため、サーバー側のデータもまだ完全には消さず、あくまで「一時停止」という中間状態にとどめています。
 - 1分未満の計測は、記録として残す価値が無いと判断され、その場で自動的に破棄されます。
@@ -238,14 +331,25 @@ timerApiStop(); // ★ サーバー側のタイマー状態も後片付け（自
 async function restoreTimer() {
   var res = await timerApiState();
   if (!res || !res.ok) return;
+
   if (res.state !== "running" && res.state !== "paused") return; // idle：何もしない
+
   applyServerTimerState(res);
-  ...
+  document.getElementById("btn-start").disabled = true;
+  document.getElementById("btn-pause").disabled = false;
+  document.getElementById("btn-stop").disabled  = false;
+  updateTimerUI();
+
   if (res.state === "paused") {
-    ...
+    document.getElementById("btn-pause").textContent    = "▶ 再開";
+    document.getElementById("timer-status").textContent =
+      res.pause_reason === "checkpoint"
+        ? "休憩中...（3時間経過したため自動的に休憩にしました。再開すると続きから計測できます）"
+        : "休憩中...（離れていた間も保持されていました）";
     startSyncPolling();
   } else {
-    ...
+    document.getElementById("btn-pause").textContent    = "⏸ 休憩";
+    document.getElementById("timer-status").textContent = "計測中...（離れていた間も継続していました）";
     startInterval();
   }
 }
