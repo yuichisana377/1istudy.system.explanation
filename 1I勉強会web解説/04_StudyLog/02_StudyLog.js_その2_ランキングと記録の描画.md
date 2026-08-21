@@ -36,14 +36,27 @@ window.addEventListener("load", function() {
 ```js
 function applySession() {
   var avatarEl   = document.getElementById("header-avatar");
-  ...
+  var nicknameEl = document.getElementById("header-nickname");
+  var idEl       = document.getElementById("header-id");
+  if (avatarEl) {
+    avatarEl.textContent      = STUDENT.nickname.slice(0, 2).toUpperCase();
+    avatarEl.style.background = STUDENT.color;
+    avatarEl.style.color      = STUDENT.textColor;
+  }
+  if (nicknameEl) nicknameEl.textContent = STUDENT.nickname;
+  if (idEl)       idEl.textContent       = STUDENT.id;
   attachAccountClickHandlers();
 }
+
+// ★ 「⚙ アカウント」ボタンの代わりに、ヘッダーのニックネーム／学籍番号を
+//   クリックするとアカウント設定モーダルが開くようにする
 function attachAccountClickHandlers() {
   hideLegacyAccountButton();
+
   var nicknameEl = document.getElementById("header-nickname");
   var idEl       = document.getElementById("header-id");
   var avatarEl   = document.getElementById("header-avatar");
+
   [nicknameEl, idEl, avatarEl].forEach(function(el) {
     if (!el) return;
     el.style.cursor = "pointer";
@@ -207,8 +220,11 @@ return sorted.map(function(u) {
 
 ```js
 function renderLogs() {
+  var el     = document.getElementById("log-list");
   var myLogs = logs.filter(function(l) { return l.student_id === STUDENT.id; });
-  ...
+  if (!myLogs.length) {
+    el.innerHTML = '<div class="empty-msg">まだ記録がありません</div>'; return;
+  }
   el.innerHTML = myLogs.slice().reverse().map(function(l) {
     return '<div class="sl-log-item">' +
       '<div class="sl-log-header">' +
@@ -242,12 +258,37 @@ function initMyLogsEvents() {
 - `el.dataset.boundClick`というフラグで、この関数が複数回呼ばれても、リスナーが二重に登録されないようにしています。
 
 ```js
+// ★ 自分の勉強ログを1件削除する。サーバー側でポイントも差し引かれるので、
+//   成功したらそのtotalでポイント表示を更新する。
 async function deleteMyLog(timeKey, btn) {
-  ...
-  data = await api("/delete_study_log", { method: "POST", body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN, time: timeKey }) });
-  ...
+  if (!timeKey) return;
+  const ok = await showAppConfirm({
+    title: "この記録を削除しますか？", desc: "記録した時間・ポイントが取り消されます。",
+    okLabel: "削除する", danger: true,
+  });
+  if (!ok) return;
+  if (btn) { btn.disabled = true; btn.textContent = "…"; }
+  var data;
+  try {
+    data = await api("/delete_study_log", {
+      method: "POST",
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN, time: timeKey }),
+    });
+  } catch (e) {
+    data = null;
+  }
+  if (!data || data.ok === false) {
+    if (data && data.error === "not_logged_in") { forceReLogin(); return; }
+    showAppAlert({ title: "削除に失敗しました", desc: data && data.error ? data.error : "" });
+    if (btn) { btn.disabled = false; btn.innerHTML = Icons.html('trash', {size:14}); }
+    return;
+  }
   logs = logs.filter(function(l) { return !(l.student_id === STUDENT.id && l.time === timeKey); });
-  if (data.total != null) { allPoints[STUDENT.id] = data.total; myPoints = data.total; updatePointDisplay(); }
+  if (data.total != null) {
+    allPoints[STUDENT.id] = data.total;
+    myPoints = data.total;
+    updatePointDisplay();
+  }
   renderAll();
 }
 ```
@@ -283,20 +324,51 @@ var members = Object.keys(memberIds).map(function(id) {
 
 ```js
 function renderTasks() {
+  var el = document.getElementById("task-list");
   var doneIds = completedTasks.map(function(e) { return e.id; });
+
   var sorted = TASKS_JSON.slice().sort(function(a, b) {
     var aDone = doneIds.includes(a.id) ? 1 : 0;
     var bDone = doneIds.includes(b.id) ? 1 : 0;
     if (aDone !== bDone) return aDone - bDone; // 未達成が先、達成済みが後ろ
-    return new Date(a.due) - new Date(b.due); // 同じ達成状態同士は締切が近い順
+    // 同じ達成状態同士は締切が近い順
+    return new Date(a.due) - new Date(b.due);
   });
-  ...
+
+  el.innerHTML = sorted.map(function(t) {
+    var done    = doneIds.includes(t.id);
+    var pending = pendingTaskIds.has(t.id);
+
+    var btnLabel = pending ? '<span class="sl-spinner" style="border-color:rgba(0,0,0,.25);border-top-color:#334155;"></span>送信中…' : (done ? (Icons.html('checkCircle', {size:13}) + " 達成済み") : "達成する");
+    var btnClass = "sl-task-btn" + (done ? " sl-task-btn-done" : "");
+
+    // ★ 備考は普段は隠しておき、タップで表示する（Plan.jsの詳細表示と同じ考え方）
+    var noteDot  = t.note ? ('<span class="note-dot" title="備考あり">' + Icons.html('memo', {size:13}) + '</span>') : '';
+    var noteHtml = t.note ? '<div class="sl-task-note">' + esc(t.note) + '</div>' : '';
+
+    return '<div class="sl-task-row' + (done ? " done-row" : "") + '">' +
+      '<div class="sl-task-body' + (t.note ? " has-note" : "") + '">' +
+        '<div class="sl-task-title' + (done ? " done" : "") + '">' + esc(t.title) + '</div>' +
+        '<div class="sl-task-meta">' +
+          '<span class="sl-subject-badge">' + esc(t.subject) + '</span>' +
+          '<span class="sl-due">締切: ' + t.due + '</span>' +
+          '<span class="sl-pts-badge">' + Icons.html('star', {size:13}) + ' +' + t.points + 'pt</span>' +
+          noteDot +
+        '</div>' +
+        noteHtml +
+      '</div>' +
+      '<button class="' + btnClass + '" data-task-id="' + escAttr(t.id) + '"' +
+        (pending ? ' disabled' : '') + '>' +
+        btnLabel +
+      '</button>' +
+    '</div>';
+  }).join("");
 }
 ```
 - 並び順は「未達成のものを先に、達成済みは後ろに」という大分類のあと、それぞれのグループ内では締切が近い順、という2段階のソートです。
 
 ```js
-var btnLabel = pending ? '<span class="sl-spinner" ...></span>送信中…' : (done ? (Icons.html('checkCircle', {size:13}) + " 達成済み") : "達成する");
+var btnLabel = pending ? '<span class="sl-spinner" style="border-color:rgba(0,0,0,.25);border-top-color:#334155;"></span>送信中…' : (done ? (Icons.html('checkCircle', {size:13}) + " 達成済み") : "達成する");
 ```
 - ボタンの表示は「送信中（`pendingTaskIds`に含まれる、＝今まさにサーバーへ送信中）」「達成済み」「達成する（未達成）」の3状態を切り替えます。
 
