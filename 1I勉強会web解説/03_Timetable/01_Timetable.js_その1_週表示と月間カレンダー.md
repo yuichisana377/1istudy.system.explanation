@@ -96,6 +96,18 @@ window.addEventListener('load', () => {
 - `adjustWeekForWeekend()`は、ページを開いた瞬間に「今が土日なら、来週の月曜日を最初に表示する」という親切な調整をする関数です。平日に開いた場合は、今日の曜日タブを最初から開いておきます。
 - ページ読み込み時に、時間割に関するデータ（課題・時間割の変更履歴・学期設定）と、予定管理機能に関するデータ（科目一覧・予定一覧）を同時に読み込み始め、`renderTimetable()`で画面を描画します。
 
+```js
+async function api(path, opts = {}) {
+  const session = getLoginSession();
+  const headers = Object.assign(
+    { "Content-Type": "application/json" },
+    (session && session.session_token) ? { "Authorization": "Bearer " + session.session_token } : {},
+    opts.headers || {}
+  );
+  const res = await fetch(API_BASE + path.replace(/^\/+/, ''), { ...opts, headers });
+  return res.json();
+}
+```
 `api(path, opts)`（246〜255行）は`Plan.js`の`api()`とほぼ同じ共通APIヘルパーです。コメントには「このページ自体（時間割の表示）は引き続き閲覧にログイン不要のままなので、未ログイン時は宿題の表示分だけ（`list_schedule`起因の部分だけ）空になる形で許容する」とあります。つまり、未ログインで時間割を見ることはできますが、その場合は課題・提出物の表示だけが（ログインが必要なAPIのため）欠けた状態になる、という仕様です。
 
 ---
