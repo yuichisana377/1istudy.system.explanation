@@ -62,15 +62,23 @@ function openDeckPicker() {
 
 ```js
 function renderSelectedDecks() {
+  const emptyWrap = document.getElementById('hs-deck-picker-empty');
+  const selectedWrap = document.getElementById('hs-deck-picker-selected');
+  const listEl = document.getElementById('hs-selected-deck-list');
   const changeBtn = document.getElementById('hs-change-decks-btn');
   changeBtn.style.display = hsDeckPickerLocked ? 'none' : '';
-  if (!hsSelectedDecks.length) { emptyWrap.style.display = ''; selectedWrap.style.display = 'none'; return; }
+
+  if (!hsSelectedDecks.length) {
+    emptyWrap.style.display = '';
+    selectedWrap.style.display = 'none';
+    return;
+  }
   emptyWrap.style.display = 'none';
   selectedWrap.style.display = '';
   listEl.innerHTML = hsSelectedDecks.map((d, i) => `
     <div class="qz-deck-chip">
       <span class="qz-deck-chip-name">${escapeHtml(d.name || d.filename)}</span>
-      ${hsDeckPickerLocked ? '' : `<button ... onclick="removeSelectedDeck(${i})">...</button>`}
+      ${hsDeckPickerLocked ? '' : `<button type="button" class="qz-deck-chip-remove" onclick="removeSelectedDeck(${i})"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></button>`}
     </div>`).join('');
 }
 ```
@@ -121,11 +129,20 @@ function addManualQuestion() {
 ```js
 const QUIZ_CSV_HEADER_ALIASES = {
   question: ['question', '問題', '問題文', 'q'],
-  choiceA:  ['choicea', '選択肢a', 'a'], ...
+  choiceA:  ['choicea', '選択肢a', 'a'],
+  choiceB:  ['choiceb', '選択肢b', 'b'],
+  choiceC:  ['choicec', '選択肢c', 'c'],
+  choiceD:  ['choiced', '選択肢d', 'd'],
   correct:  ['correct', 'answer', '正解', '正答'],
 };
 function detectQuizCsvColumns(headerRow) {
-  ...
+  const norm = headerRow.map(h => (h || '').trim().toLowerCase());
+  const idx = { question: -1, choiceA: -1, choiceB: -1, choiceC: -1, choiceD: -1, correct: -1 };
+  norm.forEach((h, i) => {
+    for (const key of Object.keys(QUIZ_CSV_HEADER_ALIASES)) {
+      if (idx[key] === -1 && QUIZ_CSV_HEADER_ALIASES[key].includes(h)) idx[key] = i;
+    }
+  });
   const isHeader = [idx.question, idx.choiceA, idx.choiceB, idx.choiceC, idx.choiceD].every(v => v !== -1);
   return { isHeader, idx };
 }
@@ -148,7 +165,28 @@ function resolveCorrectIndex(correctRaw, choices) {
 
 ```js
 async function handleQuizCsvImport(event) {
-  ...
+  const file = event.target.files[0];
+  event.target.value = ''; // 同じファイルを連続選択してもonchangeが発火するようにリセット
+  if (!file) return;
+
+  let text;
+  try {
+    text = await file.text();
+  } catch (e) {
+    await showConfirm({ title: '読み込みに失敗しました', desc: 'CSVファイルを読み込めませんでした。', okLabel: 'OK', cancelLabel: '閉じる' });
+    return;
+  }
+
+  const rows = parseCSV(text);
+  if (!rows.length) {
+    await showConfirm({ title: '読み込めるデータがありません', desc: 'CSVファイルの中身が空のようです。', okLabel: 'OK', cancelLabel: '閉じる' });
+    return;
+  }
+
+  let { isHeader, idx } = detectQuizCsvColumns(rows[0]);
+  const dataRows = isHeader ? rows.slice(1) : rows;
+  if (!isHeader) idx = { question: 0, choiceA: 1, choiceB: 2, choiceC: 3, choiceD: 4, correct: 5 };
+
   let added = 0, skipped = 0;
   for (const r of dataRows) {
     const question = (r[idx.question] || '').trim();
@@ -156,13 +194,19 @@ async function handleQuizCsvImport(event) {
     if (!question || choices.some(c => !c)) { skipped++; continue; }
     const correctRaw = idx.correct !== -1 ? (r[idx.correct] || '') : '';
     const correctIndex = resolveCorrectIndex(correctRaw, choices);
+
     const wrap = addManualQuestion();
+    // ★ .value への代入はmaxlength属性による制限を受けないため、入力欄と
+    //   同じ上限（問題文200字・選択肢80字）に合わせて明示的に切り詰める。
     wrap.querySelector('.mq-question').value = question.slice(0, 200);
     [...wrap.querySelectorAll('.mq-choice')].forEach((inp, i) => { inp.value = choices[i].slice(0, 80); });
     [...wrap.querySelectorAll('input[type=radio]')].forEach((rad, i) => { rad.checked = (i === correctIndex); });
     added++;
   }
-  ...
+
+  const parts = [`${added}問を追加しました`];
+  if (skipped) parts.push(`問題文または選択肢が空の${skipped}行をスキップしました`);
+  await showConfirm({ title: 'CSVの読み込みが完了しました', desc: parts.join('\n'), okLabel: 'OK', cancelLabel: '閉じる' });
 }
 ```
 - 1行ずつ、`addManualQuestion()`（3節）で新しい問題カードを作らせ、その戻り値（`wrap`）に対して直接値を書き込んでいきます。コメントに「読み込んだ内容は`addManualQuestion()`と同じ入力欄に反映されるので、取り込み後に見直し・修正してから作成できる」とある通り、CSV取り込み後も普通に手で編集できる、という一貫した設計です。
