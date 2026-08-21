@@ -95,12 +95,20 @@ def add_study_log():
 
 ```python
     elif method == "manual":
+        # ★ 2026-08-17、教科名を毎回変えながら連投することで「同じ教科」判定の
+        #   1分クールダウンを回避され、10分間に34件・180分ずつの水増し記録を
+        #   入れられる被害が発生した。「同じ教科」に加えて「本人の直近ログ
+        #   （教科不問）」からの経過時間もチェックすることで、教科を変える
+        #   だけの連投そのものを防ぐ。
         last_time_any = _latest_log_time(my_logs)
         if last_time_any:
             elapsed_sec_any = (now_jst - last_time_any).total_seconds()
             if elapsed_sec_any < MANUAL_COOLDOWN_SEC:
                 remain_sec = int(MANUAL_COOLDOWN_SEC - elapsed_sec_any) + 1
-                return jsonify({...})
+                return jsonify({
+                    "ok": False,
+                    "error": f"記録は、前回から{MANUAL_COOLDOWN_SEC}秒経ってから行えます（あと{remain_sec}秒）"
+                })
 
         same_subject_logs = [l for l in my_logs if l.get("subject") == subject]
         last_time = _latest_log_time(same_subject_logs)
@@ -108,12 +116,20 @@ def add_study_log():
             elapsed_sec = (now_jst - last_time).total_seconds()
             if elapsed_sec < MANUAL_COOLDOWN_SEC:
                 remain_sec = int(MANUAL_COOLDOWN_SEC - elapsed_sec) + 1
-                return jsonify({...})
+                return jsonify({
+                    "ok": False,
+                    "error": f"同じ教科の記録は、前回から{MANUAL_COOLDOWN_SEC}秒経ってから行えます（あと{remain_sec}秒）"
+                })
 
+        # ★ 1分間隔さえ守れば教科を変えて延々と積み上げられてしまうため、
+        #   1日（本人の全記録合計・教科不問）にも上限を設ける。
         today_str = now_jst.strftime("%Y-%m-%d")
         today_total = sum(l.get("minutes", 0) for l in my_logs if l.get("date") == today_str)
         if today_total + minutes > MANUAL_DAILY_MAX_MINUTES:
-            return jsonify({...})
+            return jsonify({
+                "ok": False,
+                "error": f"1日の記録合計の上限（{MANUAL_DAILY_MAX_MINUTES}分）を超えます"
+            })
 ```
 - `method == "manual"`（手入力での記録）の場合は3段階のチェックがあります。
   1. **教科を問わない、前回の記録からのクールダウン**（20秒）。
