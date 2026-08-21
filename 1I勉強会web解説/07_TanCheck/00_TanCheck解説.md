@@ -19,23 +19,58 @@
 - 「シラバス自体の変更・担当教員による運用の違いは反映されない」ため、あくまで参考値であり、正式な成績は学校の発表で確認する必要がある、という免責が明記されています。
 
 ```js
+// ── A/B/C 判定基準（1I勉強会から確認済み） ──────────────
 const GRADE_THRESHOLDS = [
   { grade: 'A', min: 85 },
   { grade: 'B', min: 70 },
   { grade: 'C', min: 60 },
 ];
+
+// ── 「小テスト」「課題」系は複数回・合算方式にする ───────
 function isMultiLabel(label) {
   return label.includes('課題') || label.includes('小テスト');
 }
+
+// ── 科目データ（情報工学科 1年・2026年度シラバスより、前期・後期とも確認済み） ──
+// items: [評価項目名, 割合(%)] の配列。合計は必ず100になるようにしてある。
 const SUBJECTS = {
   zenkiSpecialized: [
     { name: 'コンピュータリテラシ', code: '31111', items: [['課題', 100]] },
     { name: '情報技術概論',         code: '31112', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
-    ...
+    { name: '情報工学ゼミⅠ',        code: '31113', items: [['課題', 100]] },
+    { name: '情報基礎',             code: '31114', items: [['定期試験', 40], ['課題', 60]] },
   ],
-  zenkiGeneral: [ ... ],
-  kokiSpecialized: [ ... ],
-  kokiGeneral: [ ... ],
+  zenkiGeneral: [
+    { name: '国語Ⅰ',                 code: '01121', items: [['中間試験', 30], ['定期試験', 45], ['課題', 15], ['小テスト', 10]] },
+    { name: '地理',                   code: '01124', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '基礎解析Ⅰ',              code: '01125', items: [['定期試験', 40], ['課題', 20], ['小テスト', 40]] },
+    { name: '線形数学Ⅰ',              code: '01126', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '物理Ⅰ',                  code: '01127', items: [['定期試験', 50], ['課題', 20], ['小テスト', 30]] },
+    { name: '化学Ⅰ',                  code: '01128', items: [['定期試験', 50], ['課題', 20], ['小テスト', 30]] },
+    { name: '英語会話',                code: '01131', items: [['会話演習', 50], ['多読', 50]] },
+    { name: '保健体育Ⅰ',              code: '01134', items: [['スポーツテスト', 10], ['水泳', 15], ['実技課題', 55], ['保健', 20]] },
+    { name: '英語コミュニケーションⅠ', code: '01137', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '英語表現基礎',            code: '01138', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '公共',                    code: '01139', items: [['定期試験', 65], ['課題', 5], ['小テスト', 30]] },
+  ],
+  kokiSpecialized: [
+    { name: 'プログラミングⅠ',      code: '31211', items: [['定期試験', 50], ['小テスト', 20], ['プログラミング演習課題', 30]] },
+    { name: '数理工学演習Ⅰ',        code: '31213', items: [['定期試験', 40], ['課題', 10], ['小テスト', 50]] },
+  ],
+  kokiGeneral: [
+    { name: '国語Ⅰ',                 code: '01221', items: [['中間試験', 30], ['定期試験', 45], ['課題', 15], ['小テスト', 10]] },
+    { name: '地理',                   code: '01224', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '基礎解析Ⅰ',              code: '01225', items: [['定期試験', 40], ['課題', 20], ['小テスト', 40]] },
+    { name: '線形数学Ⅰ',              code: '01226', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '物理Ⅰ',                  code: '01227', items: [['定期試験', 50], ['課題', 20], ['小テスト', 30]] },
+    { name: '化学Ⅰ',                  code: '01228', items: [['定期試験', 50], ['課題', 20], ['小テスト', 30]] },
+    { name: '英語会話',                code: '01231', items: [['会話演習', 50], ['多読', 50]] },
+    { name: '保健体育Ⅰ',              code: '01233', items: [['持久走', 15], ['実技課題', 65], ['保健', 20]] },
+    { name: '英語コミュニケーションⅠ', code: '01236', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '英語表現基礎',            code: '01237', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+    { name: '公共',                    code: '01238', items: [['定期試験', 60], ['課題', 20], ['小テスト', 20]] },
+    { name: '総合理科',                code: '01234', items: [['中間試験', 30], ['定期試験', 50], ['課題', 20]] },
+  ],
 };
 ```
 - 各科目は`{ name, code, items }`という形で、`items`は`[評価項目名, 割合(%)]`のペアの配列です。コメントに「合計は必ず100になるようにしてある」とあります。
@@ -126,14 +161,75 @@ function getRows() {
   if (!Array.isArray(cur[label])) cur[label] = [];
   return cur[label];
 }
+
 function renderRows() {
   rowsWrap.innerHTML = '';
   const rows = getRows();
   rows.forEach((row, idx) => {
-    ...得点入力欄・満点入力欄・削除ボタンをそれぞれ作る...
+    const r = document.createElement('div');
+    r.className = 'tc-multi-row';
+
+    const sInput = document.createElement('input');
+    sInput.type = 'number';
+    sInput.inputMode = 'decimal';
+    sInput.className = 'tc-item-input tc-multi-score';
+    sInput.placeholder = '得点';
+    if (row.s !== undefined && row.s !== null) sInput.value = row.s;
+    sInput.addEventListener('input', () => {
+      persistEntered(subject.code, cur => {
+        const arr = cur[label] || [];
+        arr[idx] = arr[idx] || {};
+        arr[idx].s = sInput.value === '' ? undefined : Number(sInput.value);
+        cur[label] = arr;
+      });
+      onChange();
+    });
+
+    const slash = document.createElement('span');
+    slash.className = 'tc-multi-slash';
+    slash.textContent = '/';
+
+    const mInput = document.createElement('input');
+    mInput.type = 'number';
+    mInput.inputMode = 'decimal';
+    mInput.className = 'tc-item-input tc-multi-max';
+    mInput.placeholder = '100';
+    if (row.m !== undefined && row.m !== null) mInput.value = row.m;
+    mInput.addEventListener('input', () => {
+      persistEntered(subject.code, cur => {
+        const arr = cur[label] || [];
+        arr[idx] = arr[idx] || {};
+        arr[idx].m = mInput.value === '' ? undefined : Number(mInput.value);
+        cur[label] = arr;
+      });
+      onChange();
+    });
+
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.className = 'tc-multi-remove';
+    rm.setAttribute('aria-label', 'この回を削除');
+    rm.textContent = '×';
+    rm.addEventListener('click', () => {
+      persistEntered(subject.code, cur => {
+        const arr = cur[label] || [];
+        arr.splice(idx, 1);
+        cur[label] = arr;
+      });
+      renderRows();
+      onChange();
+    });
+
+    r.appendChild(sInput);
+    r.appendChild(slash);
+    r.appendChild(mInput);
+    r.appendChild(document.createTextNode('点'));
+    r.appendChild(rm);
+    rowsWrap.appendChild(r);
   });
 }
 renderRows();
+
 const addBtn = document.createElement('button');
 addBtn.textContent = '＋ ' + label + 'を1回分追加';
 addBtn.addEventListener('click', () => {
@@ -148,25 +244,40 @@ addBtn.addEventListener('click', () => {
 ### 3.4 科目カード本体：`renderSubjectCard(subject, allScores)`（297〜372行）
 ```js
 function onChange() { updateCardResult(subject, badge, resultBox); }
+
 subject.items.forEach(([label, weight]) => {
-  if (isMultiLabel(label)) { renderMultiItem(body, subject, label, weight, entered, onChange); }
-  else { renderSingleItem(body, subject, label, weight, entered, onChange); }
+  if (isMultiLabel(label)) {
+    renderMultiItem(body, subject, label, weight, entered, onChange);
+  } else {
+    renderSingleItem(body, subject, label, weight, entered, onChange);
+  }
 });
 ```
 - 科目ごとに、評価項目を1つずつ、複数回方式か単一方式かで描画を出し分けます。すべての入力欄が同じ`onChange`関数（このカードのバッジと結果表示を更新する）を共有しているので、どの項目を編集しても即座に判定結果が更新されます。
 
 ```js
+const resetBtn = document.createElement('button');
+resetBtn.type = 'button';
+resetBtn.className = 'tc-card-reset';
+resetBtn.textContent = 'この科目の入力をリセット';
 resetBtn.addEventListener('click', (e) => {
   e.stopPropagation();
   const all = loadScores();
   delete all[subject.code];
   saveScores(all);
   body.innerHTML = '';
-  subject.items.forEach(([label, weight]) => { ...空の状態で入力欄を作り直す... });
+  subject.items.forEach(([label, weight]) => {
+    if (isMultiLabel(label)) {
+      renderMultiItem(body, subject, label, weight, {}, onChange);
+    } else {
+      renderSingleItem(body, subject, label, weight, {}, onChange);
+    }
+  });
   body.appendChild(resultBox);
   body.appendChild(resetBtn);
   onChange();
 });
+body.appendChild(resetBtn);
 ```
 - 「この科目の入力をリセット」ボタンは、保存データから該当科目を削除し、入力欄自体もすべて空の状態で作り直します。`e.stopPropagation()`で、このボタンのクリックがカード全体の開閉（`head`のクリックリスナー）に伝わらないようにしています。
 
