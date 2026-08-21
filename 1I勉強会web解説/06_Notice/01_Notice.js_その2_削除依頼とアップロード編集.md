@@ -1,6 +1,6 @@
 # Notice.js その2：削除依頼・アップロード・編集・リアルタイム更新（411〜801行）
 
-[[00_HTML構造とその1_一覧と詳細表示.md]]の続きです。`Notice.js`最後のパートです。
+[00_HTML構造とその1_一覧と詳細表示.md](00_HTML構造とその1_一覧と詳細表示.md)の続きです。`Notice.js`最後のパートです。
 
 ---
 
@@ -25,7 +25,7 @@ async function deleteCurrentNotice() {
   }
 }
 ```
-- [[../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md]]の`menuDelete`と同じ「作成者本人確認」の仕組みです。サーバーが`creator_approval_required`エラーを返したら、実際には削除せず、投稿者への削除依頼フォーム（2節）を開きます。
+- [../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)の`menuDelete`と同じ「作成者本人確認」の仕組みです。サーバーが`creator_approval_required`エラーを返したら、実際には削除せず、投稿者への削除依頼フォーム（2節）を開きます。
 
 ### 1.1 削除依頼フォーム（448〜505行）
 ```js
@@ -43,7 +43,7 @@ async function submitRequestDelete() {
   showAppAlert({ title: '削除の確認を送りました', desc: res.notified_via === 'web_pending' ? '投稿者がDiscord未連携のため、次回サイトを開いたときに確認されます。' : '投稿者にDiscordで確認を送りました。承認されると削除されます。' });
 }
 ```
-- [[../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md]]の`submitRequestDelete`と同じ仕組みが、こちらは`category: 'notice'`として使われています。サーバー側の`/request_delete`という同じAPIが、デッキとお知らせの両方の削除依頼を共通で扱っていることが分かります。
+- [../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)の`submitRequestDelete`と同じ仕組みが、こちらは`category: 'notice'`として使われています。サーバー側の`/request_delete`という同じAPIが、デッキとお知らせの両方の削除依頼を共通で扱っていることが分かります。
 
 ---
 
@@ -95,7 +95,7 @@ function onFilenameInput() {
   scheduleDraftSave();
 }
 ```
-- 編集中にファイル名を変えると、「名前が変更されます」というヒントを表示しつつ、[[00_HTML構造とその1_一覧と詳細表示.md]]の下書き自動保存もスケジュールします。
+- 編集中にファイル名を変えると、「名前が変更されます」というヒントを表示しつつ、[00_HTML構造とその1_一覧と詳細表示.md](00_HTML構造とその1_一覧と詳細表示.md)の下書き自動保存もスケジュールします。
 
 ```js
 function onLocalFileSelected(e) {

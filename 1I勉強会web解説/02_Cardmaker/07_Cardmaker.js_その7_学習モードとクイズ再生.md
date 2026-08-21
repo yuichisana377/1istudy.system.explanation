@@ -1,6 +1,6 @@
 # Cardmaker.js その7：学習モードと一人用クイズの入口（3750〜4167行）
 
-[[06_Cardmaker.js_その6_カード編集と学習データ同期.md]]の続きです。
+[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の続きです。
 
 ---
 
@@ -12,7 +12,7 @@ async function startSoloQuiz(deckId) {
   return startSoloQuiz(deckId);
 }
 ```
-- これまで何度も出てきたパターンと同じで、実際のクイズ再生ロジックは`Cardmaker-quizplay.js`（[[11_遅延読み込みチャンク_一覧表示とクイズ再生.md]]）に分離されており、この関数は読み込みの「仮の窓口」です。
+- これまで何度も出てきたパターンと同じで、実際のクイズ再生ロジックは`Cardmaker-quizplay.js`（[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)）に分離されており、この関数は読み込みの「仮の窓口」です。
 
 ---
 
@@ -134,7 +134,7 @@ clearStudyProgress(studyIsFolder, progressId);
 
 ## 4. 一覧表示画面への入口（3942〜3956行）
 
-`openListView()`も、2節・[[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md]]で見た「遅延読み込みチャンクの仮の窓口」パターンと同じです。実体は`Cardmaker-listview.js`（[[11_遅延読み込みチャンク_一覧表示とクイズ再生.md]]）にあります。
+`openListView()`も、2節・[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)で見た「遅延読み込みチャンクの仮の窓口」パターンと同じです。実体は`Cardmaker-listview.js`（[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)）にあります。
 
 コメントには、この入口を経由しない例外（検索結果からの直接ジャンプ）についても触れられており、「一覧で見る」画面が実際に開くまで押せないはずのボタン（`setListViewFilter`など）は、この入口が読み込みを待つことで間接的に守られている、という設計上の注記があります。
 
@@ -176,7 +176,7 @@ if (studyIdx >= studyCards.length) {
   return;
 }
 ```
-- 全部のカードを見終えたら、完了画面に切り替え、「続きから」のデータは不要になるので消し、代わりに「完了した」という記録（[[06_Cardmaker.js_その6_カード編集と学習データ同期.md]]の`saveCompletionRecord`）を残します。ホーム画面の「プレイ中」「プレイ済み」欄もここで最新化されます。
+- 全部のカードを見終えたら、完了画面に切り替え、「続きから」のデータは不要になるので消し、代わりに「完了した」という記録（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の`saveCompletionRecord`）を残します。ホーム画面の「プレイ中」「プレイ済み」欄もここで最新化されます。
 
 ### 5.3 通常のカード表示（3996〜4052行）
 ```js
@@ -185,7 +185,7 @@ markCardSeen(studyIsFolder ? c.__deckId : studyDeckId, c);
 const qText = studyReverse ? c.answer   : c.question;
 ...
 ```
-- カードを表示するたびに`markCardSeen`（「みんなのわかる率」用の学習済み記録、[[06_Cardmaker.js_その6_カード編集と学習データ同期.md]]）を呼びます。
+- カードを表示するたびに`markCardSeen`（「みんなのわかる率」用の学習済み記録、[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)）を呼びます。
 - 反転モードなら問題欄と解答欄の中身を入れ替えて表示します。
 
 ```js
@@ -243,7 +243,7 @@ function gradeCurrentAnswer() {
 
 ## 7. 「わからない」ボタンとカード送り（4099〜4152行）
 
-`updateUnsureBtn()`／`toggleUnsure()`は、現在のカードの「わからない」マークの状態を見た目に反映・切り替える関数です（[[06_Cardmaker.js_その6_カード編集と学習データ同期.md]]の`getUnsureSet`/`saveUnsureSet`を使用）。
+`updateUnsureBtn()`／`toggleUnsure()`は、現在のカードの「わからない」マークの状態を見た目に反映・切り替える関数です（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の`getUnsureSet`/`saveUnsureSet`を使用）。
 
 ```js
 function isStudyOverlayModalOpen() {
@@ -289,4 +289,4 @@ document.addEventListener('keydown', e => {
 
 ---
 
-続きは[[08_Cardmaker.js_その8_画像処理と基盤機能.md]]で、画像の圧縮・回転補正、モーダルの開閉、そして「遅延読み込みチャンク」の仕組み本体を解説します。
+続きは[08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)で、画像の圧縮・回転補正、モーダルの開閉、そして「遅延読み込みチャンク」の仕組み本体を解説します。

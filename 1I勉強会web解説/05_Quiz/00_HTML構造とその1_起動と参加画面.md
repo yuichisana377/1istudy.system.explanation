@@ -1,10 +1,10 @@
 # みんなでクイズページ — 全体像・起動処理・参加画面（1〜394行）
 
-対象：`bot.1istudy.web/Quiz.html`（294行）、`bot.1istudy.web/Quiz.js`（971行）。用語は[[../01_index_予定管理.md]]の「0. ミニ用語辞典」も参照してください。
+対象：`bot.1istudy.web/Quiz.html`（294行）、`bot.1istudy.web/Quiz.js`（971行）。用語は[../01_index_予定管理.md](../01_index_予定管理.md)の「0. ミニ用語辞典」も参照してください。
 
 ## このページの特徴
 
-「みんなでクイズ」は、CardMakerのデッキから自動生成した（または自分で作った）4択問題を、複数人でオンライン早押し形式で遊ぶ機能です。他のページと違い**ドロワーメニューを持たず**、CardMakerからのリンク経由でのみアクセスする単発の目的ページです（[[../02_Cardmaker/00_HTML構造とページ全体像.md]]参照）。
+「みんなでクイズ」は、CardMakerのデッキから自動生成した（または自分で作った）4択問題を、複数人でオンライン早押し形式で遊ぶ機能です。他のページと違い**ドロワーメニューを持たず**、CardMakerからのリンク経由でのみアクセスする単発の目的ページです（[../02_Cardmaker/00_HTML構造とページ全体像.md](../02_Cardmaker/00_HTML構造とページ全体像.md)参照）。
 
 `Quiz.html`は`Cardmaker.html`と同じ「1枚のHTMLに全画面を用意しておき、JSで`active`クラスを付け替える」方式のSPAです。画面は多く、ゲームの進行段階に対応しています：
 
@@ -24,7 +24,7 @@
 
 `qz-confirm-overlay`は共通の確認モーダル（3節）で、これも常にHTML内に用意されています。
 
-このドキュメントでは、起動処理と「参加する」画面（1〜394行）を解説します。ホストのセットアップ画面の続きと実際の対戦進行は[[01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md]]・[[02_Quiz.js_その2_対戦の進行とリアルタイム同期.md]]で扱います。
+このドキュメントでは、起動処理と「参加する」画面（1〜394行）を解説します。ホストのセットアップ画面の続きと実際の対戦進行は[01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md](01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md)・[02_Quiz.js_その2_対戦の進行とリアルタイム同期.md](02_Quiz.js_その2_対戦の進行とリアルタイム同期.md)で扱います。
 
 ---
 
@@ -39,7 +39,7 @@
   }
 })();
 ```
-- [[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md]]と同じ、開いた瞬間の強制ログインチェックです。
+- [../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md](../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md)と同じ、開いた瞬間の強制ログインチェックです。
 
 ```js
 async function apiGet(path, params = {}, timeoutMs = 8000) {
@@ -78,7 +78,7 @@ function showConfirm({ title, desc = '', okLabel = 'OK', cancelLabel = 'キャ�
   });
 }
 ```
-- コメントに「`Cardmaker.js`の`showCmConfirm`と同じ考え方の簡易版」とあります。ただし、[[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md]]の`showCmConfirm`のように毎回新しい要素を作るのではなく、**HTMLに最初から用意されている1つのモーダル要素**（`qz-confirm-overlay`）の中身を毎回書き換えて使い回す、少し軽量な作り方です。
+- コメントに「`Cardmaker.js`の`showCmConfirm`と同じ考え方の簡易版」とあります。ただし、[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md](../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md)の`showCmConfirm`のように毎回新しい要素を作るのではなく、**HTMLに最初から用意されている1つのモーダル要素**（`qz-confirm-overlay`）の中身を毎回書き換えて使い回す、少し軽量な作り方です。
 
 ---
 
@@ -92,7 +92,7 @@ function applyServerNow(data) {
   }
 }
 ```
-- コメントに理由が詳しく書かれています：「タイマーバーは`question_started_at`（サーバー時計での開始時刻）を、この端末の`Date.now()`と直接比較して残り時間を計算しているため、端末の時計がサーバーとズレていると（特にスマホでよくある）進み方がホストと食い違って見えていた」。[[../04_StudyLog/04_StudyLog.js_その4_タイマー機能.md]]の`applyServerTimerState`で見たのと同じ「時計のズレ補正」の考え方を、ここでも`quizClockOffsetMs`という1つの数値としてシンプルに扱っています。サーバーからの応答が届くたびにこの関数を呼んで補正値を更新し直します。
+- コメントに理由が詳しく書かれています：「タイマーバーは`question_started_at`（サーバー時計での開始時刻）を、この端末の`Date.now()`と直接比較して残り時間を計算しているため、端末の時計がサーバーとズレていると（特にスマホでよくある）進み方がホストと食い違って見えていた」。[../04_StudyLog/04_StudyLog.js_その4_タイマー機能.md](../04_StudyLog/04_StudyLog.js_その4_タイマー機能.md)の`applyServerTimerState`で見たのと同じ「時計のズレ補正」の考え方を、ここでも`quizClockOffsetMs`という1つの数値としてシンプルに扱っています。サーバーからの応答が届くたびにこの関数を呼んで補正値を更新し直します。
 
 ```js
 let launchDeckInfo = null;
@@ -100,7 +100,7 @@ let hsSelectedDecks = [];
 let hsDeckPickerLocked = false;
 ```
 - `launchDeckInfo`：CardMakerのデッキメニューから「みんなでクイズを始める」で直接来た場合の、単発デッキ情報。
-- `hsSelectedDecks`：「デッキから自動作成」で選ばれているデッキ一覧。コメントに「`Cardmaker.html`（いつもの単語のホーム画面）を`?pick=quiz`で開いて選んでもらい、`sessionStorage`経由でここへ受け取る」とあります。これは[[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md]]で解説した「クイズ用デッキ選択モード（pickMode）」の受け手側の実装です。
+- `hsSelectedDecks`：「デッキから自動作成」で選ばれているデッキ一覧。コメントに「`Cardmaker.html`（いつもの単語のホーム画面）を`?pick=quiz`で開いて選んでもらい、`sessionStorage`経由でここへ受け取る」とあります。これは[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md](../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md)で解説した「クイズ用デッキ選択モード（pickMode）」の受け手側の実装です。
 
 ---
 
@@ -138,7 +138,7 @@ if (mode === 'host') {
 ```
 - URLのパラメータを見て、このページがどんな状況で開かれたかを判定し、4通りに分岐します：
   1. `?mode=host&deck=...`：CardMakerのデッキメニューから、特定の1つのデッキで直接ホスト設定画面へ。
-  2. `?mode=host&fromPicker=1`：[[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md]]のデッキ選択モードから「決定」して戻ってきた場合。`sessionStorage`に控えられていた選択結果を読み取ります。
+  2. `?mode=host&fromPicker=1`：[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md](../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md)のデッキ選択モードから「決定」して戻ってきた場合。`sessionStorage`に控えられていた選択結果を読み取ります。
   3. `?code=XXXXXX`：共有リンクなど、コード付きURLで直接開かれた場合。コメントに「参加者は普段コードを意識しなくてよいが、リンク共有自体は引き続き使える」とあります。
   4. `?mode=join`：参加画面へ直接。
   5. それ以外：普通にホーム画面。
@@ -232,4 +232,4 @@ function quizErrorText(code) {
 
 ---
 
-続きは[[01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md]]で、ホストのクイズ作成画面（デッキ選択・手動作成・CSV読み込み・ルーム作成）を解説します。
+続きは[01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md](01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md)で、ホストのクイズ作成画面（デッキ選択・手動作成・CSV読み込み・ルーム作成）を解説します。

@@ -1,6 +1,6 @@
 # StudyLog.js その1：ログイン・アカウント設定・データ読み込み（1〜635行）
 
-[[00_HTML構造と全体像.md]]の続きです。用語は[[../01_index_予定管理.md]]の「0. ミニ用語辞典」も参照してください。
+[00_HTML構造と全体像.md](00_HTML構造と全体像.md)の続きです。用語は[../01_index_予定管理.md](../01_index_予定管理.md)の「0. ミニ用語辞典」も参照してください。
 
 ---
 
@@ -32,7 +32,7 @@ function setButtonLoading(btn, loading, label) {
   }
 }
 ```
-- [[../02_Cardmaker/08_Cardmaker.js_その8_画像処理と基盤機能.md]]の`setBtnLoading`と同じ考え方の関数です。このページのボタンはこの関数で「保存中…」の見た目に切り替えられます。
+- [../02_Cardmaker/08_Cardmaker.js_その8_画像処理と基盤機能.md](../02_Cardmaker/08_Cardmaker.js_その8_画像処理と基盤機能.md)の`setBtnLoading`と同じ考え方の関数です。このページのボタンはこの関数で「保存中…」の見た目に切り替えられます。
 
 ---
 
@@ -43,7 +43,7 @@ const _s = getSession() || {};
 const STUDENT = { id: _s.student_id, nickname: _s.nickname, color: _s.color, textColor: _s.text_color };
 const SESSION_TOKEN = _s.session_token;
 ```
-- [[../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md]]の`STUDENT`と同じパターンです。`SESSION_TOKEN`はログイン証明のトークンを、変数名を付けて何度も使えるようにしたものです。コメントに「サーバーはこれを使って`student_id`を特定するので、クライアントが送る`student_id`自体は（表示用途を除き）信用されない」とあります。つまり、通信のたびに「自分は誰です」と学籍番号を自己申告するのではなく、サーバー側がこのトークンから本人を特定する仕組みで、なりすましを防いでいます。
+- [../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md](../02_Cardmaker/01_Cardmaker.js_その1_ログインとデータ管理.md)の`STUDENT`と同じパターンです。`SESSION_TOKEN`はログイン証明のトークンを、変数名を付けて何度も使えるようにしたものです。コメントに「サーバーはこれを使って`student_id`を特定するので、クライアントが送る`student_id`自体は（表示用途を除き）信用されない」とあります。つまり、通信のたびに「自分は誰です」と学籍番号を自己申告するのではなく、サーバー側がこのトークンから本人を特定する仕組みで、なりすましを防いでいます。
 
 ```js
 (function() {
@@ -51,7 +51,7 @@ const SESSION_TOKEN = _s.session_token;
   if (!s || !s.session_token) { location.replace("/Login.html"); }
 })();
 ```
-- このページは、[[../01_index_予定管理.md]]の`Plan.js`と同じように、開いた瞬間に未ログインなら強制的にログイン画面へ飛ばします。ただし`Plan.js`と違い、戻ってくるためのURL記憶（`sessionStorage.setItem('post_login_redirect', ...)`）は行っていません。
+- このページは、[../01_index_予定管理.md](../01_index_予定管理.md)の`Plan.js`と同じように、開いた瞬間に未ログインなら強制的にログイン画面へ飛ばします。ただし`Plan.js`と違い、戻ってくるためのURL記憶（`sessionStorage.setItem('post_login_redirect', ...)`）は行っていません。
 
 ```js
 function splitContentNote(raw) {
@@ -60,13 +60,13 @@ function splitContentNote(raw) {
   return { text: (textPart || "").trim(), note: (notePart || "").trim() };
 }
 ```
-- [[../01_index_予定管理.md]]の`parsePlanContent`と似ていますが、カテゴリ部分（`【】`の中身）自体は返さず、取り除いた残りだけを本文・備考に分ける、少し簡略化された版です（課題一覧ではカテゴリの区別が使われないため）。
+- [../01_index_予定管理.md](../01_index_予定管理.md)の`parsePlanContent`と似ていますが、カテゴリ部分（`【】`の中身）自体は返さず、取り除いた残りだけを本文・備考に分ける、少し簡略化された版です（課題一覧ではカテゴリの区別が使われないため）。
 
 ---
 
 ## 3. ドロワーのアカウント表示（87〜172行）
 
-`renderDrawerAccount()`の実装自体は[[../01_index_予定管理.md]]の`Plan.js`版とほぼ同じですが、1点大きな違いがあります：
+`renderDrawerAccount()`の実装自体は[../01_index_予定管理.md](../01_index_予定管理.md)の`Plan.js`版とほぼ同じですが、1点大きな違いがあります：
 
 ```js
 var settingsBtn = document.createElement('button');
@@ -127,7 +127,7 @@ function setAcctMsg(id, msg, isError) {
   el.style.color = isError ? "#dc2626" : "#16a34a";
 }
 ```
-- `escapeHtmlSl`はこのファイル独自の`esc()`相当の関数（[[../01_index_予定管理.md]]参照）。`setAcctMsg`はモーダル内のメッセージ欄（保存成功・エラーなど）を表示する共通関数で、コメントに「`msg`は常にこのファイル内の固定文字列なので、`innerHTML`で組み立てても安全」とあります（サーバーから返ってくるエラーメッセージをそのまま使っている箇所もあるため、ここは他の慎重な箇所と比べるとやや踏み込んだ扱いです）。
+- `escapeHtmlSl`はこのファイル独自の`esc()`相当の関数（[../01_index_予定管理.md](../01_index_予定管理.md)参照）。`setAcctMsg`はモーダル内のメッセージ欄（保存成功・エラーなど）を表示する共通関数で、コメントに「`msg`は常にこのファイル内の固定文字列なので、`innerHTML`で組み立てても安全」とあります（サーバーから返ってくるエラーメッセージをそのまま使っている箇所もあるため、ここは他の慎重な箇所と比べるとやや踏み込んだ扱いです）。
 
 ### 4.4 ニックネーム変更：`submitNicknameChange()`（431〜465行）
 ```js
@@ -160,7 +160,7 @@ async function doLogout() {
   location.replace("/Login.html");
 }
 ```
-- [[../01_index_予定管理.md]]で紹介した`Dialog.js`共通の確認ダイアログ（`showAppConfirm`）を使っています。
+- [../01_index_予定管理.md](../01_index_予定管理.md)で紹介した`Dialog.js`共通の確認ダイアログ（`showAppConfirm`）を使っています。
 
 ### 4.6 セッション切れの強制ログイン画面誘導（478〜482行）
 ```js
@@ -232,7 +232,7 @@ async function loadPoints() {
   } catch(e) { allPoints = {}; myPoints = 0; }
 }
 ```
-- 全員の累計ポイントを取得し、ヘッダーのポイントバッジ（`updatePointDisplay()`、[[02_StudyLog.js_その2_ランキングと記録の描画.md]]で説明）を更新します。
+- 全員の累計ポイントを取得し、ヘッダーのポイントバッジ（`updatePointDisplay()`、[02_StudyLog.js_その2_ランキングと記録の描画.md](02_StudyLog.js_その2_ランキングと記録の描画.md)で説明）を更新します。
 
 ### 5.1 ログを実際に投稿する：`postLog(entry)`（601〜634行）
 ```js
@@ -262,8 +262,8 @@ async function postLog(entry) {
 ```
 - 手入力・タイマーの両方から呼ばれる、勉強ログを実際にサーバーへ送信する共通関数です。コメントに過去の設計判断の変更が記録されています：「以前は通信エラー時もローカルだけ成功扱いにしていたが、サーバー側の不正防止チェック（連続記録の制限など）を無意味にしてしまうため、失敗はきちんと失敗として扱う」。つまり、通信が失敗した場合に「見た目だけ成功したことにする」という、ユーザーに優しそうに見える実装を、あえてやめた経緯があります。サーバー側が「これは記録として認められません」と判断したものを、クライアント側の判断で勝手に成功扱いにしてしまうと、ポイント制度の不正防止の仕組みが意味を失ってしまうためです。
 - 獲得ポイント（`earned`）は、サーバーが計算した値（`data.earned`）を優先して使い、無ければクライアント側でも同じ計算式（5分で1pt）を使って見た目上のフォールバックをします。
-- `floatPoints("+5pt")`（[[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md]]で説明）は、獲得ポイントをふわっと浮かび上がるアニメーションで表示する演出です。
+- `floatPoints("+5pt")`（[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)で説明）は、獲得ポイントをふわっと浮かび上がるアニメーションで表示する演出です。
 
 ---
 
-続きは[[02_StudyLog.js_その2_ランキングと記録の描画.md]]で、週間ランキングの集計とホーム画面の描画処理を解説します。
+続きは[02_StudyLog.js_その2_ランキングと記録の描画.md](02_StudyLog.js_その2_ランキングと記録の描画.md)で、週間ランキングの集計とホーム画面の描画処理を解説します。

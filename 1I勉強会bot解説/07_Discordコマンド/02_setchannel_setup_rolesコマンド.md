@@ -26,7 +26,7 @@ async def setchannel(interaction: discord.Interaction, type: app_commands.Choice
         label = "通生（朝5:30・夜20:00）"
     ...
 ```
-- `@app_commands.choices(type=[...])`… `type`引数を自由入力ではなく、あらかじめ決められた3つの選択肢（`Choice`）からしか選べないようにする指定です。[[00_ユーティリティ関数と_addコマンド.md]]のオートコンプリート（自由入力＋候補表示）とは違い、こちらは**候補以外を入力できない**という、より厳格な制約です。通知チャンネルの種類は決め打ちで数が少ないため、こちらの方式が使われています。
+- `@app_commands.choices(type=[...])`… `type`引数を自由入力ではなく、あらかじめ決められた3つの選択肢（`Choice`）からしか選べないようにする指定です。[00_ユーティリティ関数と_addコマンド.md](00_ユーティリティ関数と_addコマンド.md)のオートコンプリート（自由入力＋候補表示）とは違い、こちらは**候補以外を入力できない**という、より厳格な制約です。通知チャンネルの種類は決め打ちで数が少ないため、こちらの方式が使われています。
 - `type: app_commands.Choice[str] = None`… デフォルト値が`None`なので、省略も可能です。省略時は`kind = type.value if type else "commute"`により`"commute"`（通生）扱いになります。
 - 選ばれた種類に応じて、`config`（このguildの設定）の対応するフィールドに、**今このコマンドを実行したチャンネルのID**（`interaction.channel.id`）を保存します。「このコマンドを実行したチャンネル自体が、その種類の通知先になる」という直感的な設定方法です。
 - 保存された`config`は、後述する自動通知の章（`send_tomorrow_plans`など）で、「どのチャンネルに通知を送るか」を決めるために読み込まれることになります。
@@ -178,4 +178,4 @@ async def on_raw_reaction_remove(payload: discord.RawReactionActionEvent):
 
 ---
 
-次は、「/id連携」コマンドと「/help」コマンドを解説します。 → [[03_id連携とhelpコマンド.md]]
+次は、「/id連携」コマンドと「/help」コマンドを解説します。 → [03_id連携とhelpコマンド.md](03_id連携とhelpコマンド.md)

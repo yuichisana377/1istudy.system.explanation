@@ -62,7 +62,7 @@ def _quiz_room_snapshot(room, student_id):
                 snap["your_correct"] = bool(player["cur_correct"])
     return snap
 ```
-- **これがこの関数で最も重要な安全対策です**：`question_payload`には常に`question`（問題文）と`choices`（選択肢）が含まれますが、`correct_index`（正解の番号）は`revealed`（＝`state == "reveal"`）のときだけ含まれます。もしこのガードが無く、出題中から正解番号がレスポンスに含まれていたら、ブラウザの開発者ツールでネットワーク通信の中身を見るだけで、誰でも正解が分かってしまいます（[[00_クイズルームの設計とヘルパー関数.md]]の設計方針にあった「正解番号はホストにも発表されるまでは一切渡さない」の実装がここです）。
+- **これがこの関数で最も重要な安全対策です**：`question_payload`には常に`question`（問題文）と`choices`（選択肢）が含まれますが、`correct_index`（正解の番号）は`revealed`（＝`state == "reveal"`）のときだけ含まれます。もしこのガードが無く、出題中から正解番号がレスポンスに含まれていたら、ブラウザの開発者ツールでネットワーク通信の中身を見るだけで、誰でも正解が分かってしまいます（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)の設計方針にあった「正解番号はホストにも発表されるまでは一切渡さない」の実装がここです）。
 - `revealed`のときだけ`_quiz_room_players_json(room, include_correct=True)`で`players`を**上書き**しています。これにより、正解発表の瞬間だけ、他の参加者の正誤（◯×）が一覧に反映されます。
 - `player["cur_answer"]`（**自分自身**の回答）は、`revealed`かどうかに関わらず渡されます。自分が何を選んだかは、他の参加者に隠す必要が無い（自分自身の情報だから）ためです。ただし、自分の回答が「正解だったかどうか」（`your_correct`）は、他の参加者の正誤と同様に`revealed`のときだけ渡されます。
 
@@ -88,7 +88,7 @@ def _pick_distractors(correct: str, pool: list, k: int) -> list:
     return random.sample(scored[:pool_size], k)
 ```
 - これはクイズの「面白さ・妥当性」に関わる、興味深いアルゴリズムです。単に不正解の選択肢をランダムに選ぶだけだと、コメントの通り「正解だけ極端に短い/長い」のような、内容を知らなくても見た目だけで消去法により正解できてしまう、質の低い4択になりがちでした。
-- `difflib.SequenceMatcher(None, correct, a).ratio()`… [[../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md]]などで登場した`difflib`ライブラリの、今度は**類似度を測る**機能です。2つの文字列がどれだけ似ているか（0〜1の比率）を計算します。
+- `difflib.SequenceMatcher(None, correct, a).ratio()`… [../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md](../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md)などで登場した`difflib`ライブラリの、今度は**類似度を測る**機能です。2つの文字列がどれだけ似ているか（0〜1の比率）を計算します。
 - `_score`関数は、**文字列としての似ている度合い（70%の重み）**と**文字数の近さ（30%の重み）**を組み合わせたスコアです。コメントの追加説明にある通り、綴りの類似度だけだと「文字数が全然違うせいで一目で誤答と分かる」選択肢が紛れ込みやすかったため、文字数の近さも加味するよう改良されています。
 - `scored = sorted(pool, key=_score, reverse=True)`… 候補全体をスコアの高い順（正解に似ている順）に並べます。
 - `pool_size = max(k, min(len(scored), k * 2))`… 上位何件から実際に選ぶかを決めます。`k=3`（3つの誤答が必要）なら、`pool_size`は最大6件です。コメントにある通り、以前は「上位9件からランダムに3件」だったものを「上位6件から3件」とタイトに絞ることで、「似ているが選ばれなかった紛らわしい候補が混ざりにくく」し、消去法が効きにくい4択にする改善が行われています。
@@ -130,7 +130,7 @@ def _build_deck_questions(deck_filenames, num_questions):
     if len(cards) < 4 or len(unique_answers) < 4:
         return None, "deck_too_small"
 ```
-- ここでも[[../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md]]と同じパストラバーサル対策があります。
+- ここでも[../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md](../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md)と同じパストラバーサル対策があります。
 - 指定された全デッキから、問題文・解答の両方が空でないカードだけを`cards`に集約します。
 - `unique_answers = {c["answer"].strip() for c in cards}`… 集合（set）内包表記で、重複を除いた解答の種類数を数えます。コメントの通り「4択（正解1つ＋不正解3つ）を作るには、答えの異なり（ユニークな値）が最低4つ必要」というルールがここでチェックされます。
 
@@ -157,7 +157,7 @@ def _build_deck_questions(deck_filenames, num_questions):
 ```
 - `n = max(1, min(n, QUIZ_MAX_QUESTIONS, len(cards)))`… 出題数を「1問以上」「上限30問（`QUIZ_MAX_QUESTIONS`）以内」「実際に使えるカード数以内」の3つの制約すべてに収まるよう調整します。
 - `random.sample(cards, n)`で、実際に出題するカードをランダムに選びます。
-- 各カードについて、`pool`（そのカード以外の、正解と異なる解答の集合。`dict.fromkeys(...)`は順序を保ったまま重複除去する、リスト内包の`set`版に近いテクニック）を作り、[[#3-見分けにくい誤答の生成pick_distractors4953〜4976行]]の`_pick_distractors`で3つの誤答を選びます。
+- 各カードについて、`pool`（そのカード以外の、正解と異なる解答の集合。`dict.fromkeys(...)`は順序を保ったまま重複除去する、リスト内包の`set`版に近いテクニック）を作り、[3. 見分けにくい誤答の生成：`_pick_distractors`（4953〜4976行）](#3-見分けにくい誤答の生成pick_distractors49534976行)の`_pick_distractors`で3つの誤答を選びます。
 - `choices = _pick_distractors(...) + [correct]`で4つの選択肢を作り、`random.shuffle(choices)`でシャッフルしてから、`correct_index`（正解が何番目に来たか）を記録します。この時点ではまだ、誰が見ても正解が分からないよう、正解の位置自体もランダムです。
 
 ## 5. 手入力問題の検証：`_validate_manual_questions`（5039〜5063行）
@@ -190,8 +190,8 @@ def _validate_manual_questions(raw_questions):
 ```
 - ホストが「自分で問題を作る」オリジナル4択モードで入力したデータを検証します。デッキから自動生成する場合と違い、ここでは**利用者が自由に入力したテキスト**を扱うため、非常に丁寧なバリデーションが行われています。
 - `len(choices) != 4`… 選択肢は必ずちょうど4つでなければなりません。
-- `if not isinstance(correct_index, int) or isinstance(correct_index, bool) or not (0 <= correct_index < 4):`… [[../09_FlaskAPI_予定管理/01_学習ログ記録APIのなりすまし対策と連打対策.md]]の`add_study_log`で見たのと同じ、`bool`が`int`のサブクラスであることへの対策が、ここにも登場しています。加えて、正解番号が0〜3の範囲に収まっているかも確認します。
-- `check_fields`… 検証したテキストを、後で呼び出し元が[[../02_データ保存基盤/02_設定ファイルと不正文字チェック.md]]の`reject_if_bug_chars`にまとめて渡すための辞書です。この関数自身は不正文字チェックまでは行わず、その責務は呼び出し元に委ねられています。
+- `if not isinstance(correct_index, int) or isinstance(correct_index, bool) or not (0 <= correct_index < 4):`… [../09_FlaskAPI_予定管理/01_学習ログ記録APIのなりすまし対策と連打対策.md](../09_FlaskAPI_予定管理/01_学習ログ記録APIのなりすまし対策と連打対策.md)の`add_study_log`で見たのと同じ、`bool`が`int`のサブクラスであることへの対策が、ここにも登場しています。加えて、正解番号が0〜3の範囲に収まっているかも確認します。
+- `check_fields`… 検証したテキストを、後で呼び出し元が[../02_データ保存基盤/02_設定ファイルと不正文字チェック.md](../02_データ保存基盤/02_設定ファイルと不正文字チェック.md)の`reject_if_bug_chars`にまとめて渡すための辞書です。この関数自身は不正文字チェックまでは行わず、その責務は呼び出し元に委ねられています。
 
 ## 6. クイズ結果のCardMakerアーカイブ（5065〜5128行）
 
@@ -248,4 +248,4 @@ def _archive_room_if_needed(room):
 
 ---
 
-次は、実際にルームを作成・参加・進行させるAPI群（`/quiz_create`から`/quiz_leave`まで）を解説します。 → [[02_ルーム操作API.md]]
+次は、実際にルームを作成・参加・進行させるAPI群（`/quiz_create`から`/quiz_leave`まで）を解説します。 → [02_ルーム操作API.md](02_ルーム作成と過去問ランキング.md)

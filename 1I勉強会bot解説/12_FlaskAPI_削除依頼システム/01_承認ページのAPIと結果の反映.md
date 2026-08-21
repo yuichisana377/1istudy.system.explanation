@@ -33,7 +33,7 @@ def pending_delete_requests():
         for it in mine
     ]})
 ```
-- [[00_削除依頼トークンと送信フロー.md]]で見た`/request_delete`が、DM送信に失敗した場合に`pending_delete_requests_{guild_id}.json`へ控えていた依頼を、**ログイン中の本人宛の分だけ**絞り込んで返すAPIです。フロント側の共通コンポーネント`PendingDeleteCheck.js`（[[../../1I勉強会web解説]]で紹介済み）が、サイトを開くたびにこのAPIを呼び、該当する依頼があれば確認モーダルを表示します。
+- [00_削除依頼トークンと送信フロー.md](00_削除依頼トークンと送信フロー.md)で見た`/request_delete`が、DM送信に失敗した場合に`pending_delete_requests_{guild_id}.json`へ控えていた依頼を、**ログイン中の本人宛の分だけ**絞り込んで返すAPIです。フロント側の共通コンポーネント`PendingDeleteCheck.js`（[../../1I勉強会web解説](../../1I勉強会web解説/01_index_予定管理.md)で紹介済み）が、サイトを開くたびにこのAPIを呼び、該当する依頼があれば確認モーダルを表示します。
 - `str(it.get("owner_id")) == str(student_id)`… 保存されている全guildの依頼の中から、今ログインしている本人（`student_id`）が作成者（`owner_id`）である依頼だけを取り出します。
 - `now - it.get("created_at", 0) <= DELETE_REQUEST_TOKEN_TTL_SEC`… トークンの有効期限（14日）と**全く同じ期限**で、表示対象から外しています。コメントの通り、これはトークン自体が既に期限切れになっている依頼を、いつまでも確認待ちとして表示し続けないようにするための整合性です。もしこの期限チェックが無いと、既に無効なトークンへのリンクを含む確認モーダルが表示され続けてしまい、押しても「リンクが無効です」というエラーにしかならない、という不親切な状態になります。
 - レスポンスに含めるフィールドは、承認ページで表示するために最低限必要なものだけに絞られています（`owner_id`のような内部的な情報は含まれません）。
@@ -67,9 +67,9 @@ def delete_request_info():
         "already_gone": not exists,
     })
 ```
-- これが、[[../../1I勉強会web解説/10_DeleteApproval/00_DeleteApproval解説.md]]で見た`DeleteApproval.js`の`init()`が呼んでいるAPIの実体です。コメントの通り、**ログイン不要**です。「トークンさえ分かれば閲覧できる」という設計は、[[../../1I勉強会webの裏側（設計の話）.md|デスクトップの設計資料]]にもある通り、「トークン自体がDMで本人にだけ届く合言葉の代わり」という考え方に基づいています。
-- `resolve_delete_request_token(token)`でトークンを検証し、`_delete_target_summary`で**今この瞬間の最新の内容**を取得します（[[00_削除依頼トークンと送信フロー.md]]で解説した通り、依頼時点のスナップショットではありません）。
-- `exists`… 対象のファイルが今も実際に存在するかどうかを確認します。`already_gone: not exists`… もし既に削除済み、または既に別の経路で処理済みであれば、フロント側はこれを見て「以下の内容は依頼された時点のものです」という注記を表示できます（[[../../1I勉強会web解説/10_DeleteApproval/00_DeleteApproval解説.md]]で見た通りです）。
+- これが、[../../1I勉強会web解説/10_DeleteApproval/00_DeleteApproval解説.md](../../1I勉強会web解説/10_DeleteApproval/00_DeleteApproval解説.md)で見た`DeleteApproval.js`の`init()`が呼んでいるAPIの実体です。コメントの通り、**ログイン不要**です。「トークンさえ分かれば閲覧できる」という設計は、[デスクトップの設計資料](../../1I勉強会webの裏側（設計の話）.md)にもある通り、「トークン自体がDMで本人にだけ届く合言葉の代わり」という考え方に基づいています。
+- `resolve_delete_request_token(token)`でトークンを検証し、`_delete_target_summary`で**今この瞬間の最新の内容**を取得します（[00_削除依頼トークンと送信フロー.md](00_削除依頼トークンと送信フロー.md)で解説した通り、依頼時点のスナップショットではありません）。
+- `exists`… 対象のファイルが今も実際に存在するかどうかを確認します。`already_gone: not exists`… もし既に削除済み、または既に別の経路で処理済みであれば、フロント側はこれを見て「以下の内容は依頼された時点のものです」という注記を表示できます（[../../1I勉強会web解説/10_DeleteApproval/00_DeleteApproval解説.md](../../1I勉強会web解説/10_DeleteApproval/00_DeleteApproval解説.md)で見た通りです）。
 
 ## 3. `/respond_delete_request`：承認/拒否の実行（3829〜3890行）
 
@@ -85,7 +85,7 @@ def respond_delete_request():
     if action not in ("approve", "reject"):
         return jsonify({"ok": False, "error": "invalid action"})
 ```
-- `action not in ("approve", "reject")`… ここでも[[00_削除依頼トークンと送信フロー.md]]の`category`と同じホワイトリスト方式の検証です。
+- `action not in ("approve", "reject")`… ここでも[00_削除依頼トークンと送信フロー.md](00_削除依頼トークンと送信フロー.md)の`category`と同じホワイトリスト方式の検証です。
 
 ```python
     category = payload.get("category")
@@ -146,4 +146,4 @@ def respond_delete_request():
 
 ---
 
-これで「削除依頼システム」の章が終わりました。この仕組みは、後の章で見る`/delete_cards`と`/delete_notice`の両方から共通して使われます。次は、ニックネーム変更・学習ログ一覧・ポイント・課題達成のAPIをまとめて解説します。 → [[../13_FlaskAPI_その他小さめAPI/00_ニックネーム変更とポイント課題達成API.md]]
+これで「削除依頼システム」の章が終わりました。この仕組みは、後の章で見る`/delete_cards`と`/delete_notice`の両方から共通して使われます。次は、ニックネーム変更・学習ログ一覧・ポイント・課題達成のAPIをまとめて解説します。 → [../13_FlaskAPI_その他小さめAPI/00_ニックネーム変更とポイント課題達成API.md](../13_FlaskAPI_その他小さめAPI/00_ニックネーム変更とポイント課題達成API.md)

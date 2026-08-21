@@ -2,7 +2,7 @@
 
 対象：`bot.1istudy.web/Cardmaker.html`（721行）、`bot.1istudy.web/Cardmaker.js`（5117行）＋5つの補助JSファイル（合計約1039行）。
 
-CardMakerはこのサイトの中でもっとも大きく複雑な機能で、暗記カード（フラッシュカード）の作成・共同編集・フォルダ整理・学習・CSV一括登録・一人用クイズなどを1ページに詰め込んでいます。ファイルが大きいため、解説も複数のファイルに分けて書いています。読み方が分からない専門用語が出てきたら、まず[[01_index_予定管理.md]]の「0. ミニ用語辞典」を確認してください（このシリーズ共通の用語集です）。CardMaker特有の新しい用語は、出てきた場所でその都度説明します。
+CardMakerはこのサイトの中でもっとも大きく複雑な機能で、暗記カード（フラッシュカード）の作成・共同編集・フォルダ整理・学習・CSV一括登録・一人用クイズなどを1ページに詰め込んでいます。ファイルが大きいため、解説も複数のファイルに分けて書いています。読み方が分からない専門用語が出てきたら、まず[01_index_予定管理.md](../01_index_予定管理.md)の「0. ミニ用語辞典」を確認してください（このシリーズ共通の用語集です）。CardMaker特有の新しい用語は、出てきた場所でその都度説明します。
 
 ## このフォルダの構成
 
@@ -65,5 +65,5 @@ CardMakerはこのサイトの中でもっとも大きく複雑な機能で、�
 <script src="/Cardmaker.js"></script>
 <script src="/PendingDeleteCheck.js"></script>
 ```
-- 他ページと違い、`Dialog.js`は読み込んでいません。CardMakerは独自の確認・アラートダイアログ（`showCmConfirm`/`showCmAlert`、[[01_Cardmaker.js_その1_ログインとデータ管理.md]]で解説）を持っているためです。
-- `Cardmaker-csvimport.js`・`Cardmaker-cardreorder.js`・`Cardmaker-search.js`・`Cardmaker-listview.js`・`Cardmaker-quizplay.js`という5つのファイルも、ここには書かれていません。これらは最初から読み込むのではなく、**実際にその機能が必要になったタイミングでJSが動的に`<script>`タグを作って読み込む**、「遅延読み込みチャンク」という仕組みになっています。詳しくは[[08_Cardmaker.js_その8_画像処理と基盤機能.md]]の`loadChunk`の節で説明します。ページを開いた瞬間に5000行を超えるメインファイルに加えてこれらも全部読み込むと重くなるため、使う機能だけを後から追加ダウンロードする、という工夫です。
+- 他ページと違い、`Dialog.js`は読み込んでいません。CardMakerは独自の確認・アラートダイアログ（`showCmConfirm`/`showCmAlert`、[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)で解説）を持っているためです。
+- `Cardmaker-csvimport.js`・`Cardmaker-cardreorder.js`・`Cardmaker-search.js`・`Cardmaker-listview.js`・`Cardmaker-quizplay.js`という5つのファイルも、ここには書かれていません。これらは最初から読み込むのではなく、**実際にその機能が必要になったタイミングでJSが動的に`<script>`タグを作って読み込む**、「遅延読み込みチャンク」という仕組みになっています。詳しくは[08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)の`loadChunk`の節で説明します。ページを開いた瞬間に5000行を超えるメインファイルに加えてこれらも全部読み込むと重くなるため、使う機能だけを後から追加ダウンロードする、という工夫です。

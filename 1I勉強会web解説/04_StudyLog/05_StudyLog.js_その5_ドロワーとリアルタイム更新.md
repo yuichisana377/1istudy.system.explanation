@@ -1,12 +1,12 @@
 # StudyLog.js その5：ドロワー・ユーティリティ・リアルタイム更新（1642〜1836行）
 
-[[04_StudyLog.js_その4_タイマー機能.md]]の続きです。`StudyLog.js`最後のパートです。
+[04_StudyLog.js_その4_タイマー機能.md](04_StudyLog.js_その4_タイマー機能.md)の続きです。`StudyLog.js`最後のパートです。
 
 ---
 
 ## 1. ドロワー（1642〜1698行）
 
-`openDrawer`/`prefetchOtherPages`/`closeDrawer`とドロワーリンクのクリック処理・`pageshow`イベント処理は、[[../01_index_予定管理.md]]・[[../03_Timetable/04_Timetable.js_その4_予定管理モーダル共通処理.md]]で見てきたものと同じ構造です。先読み対象のファイル一覧が、このページ自身（`StudyLog.js`）を除いた他ページのリストになっています。
+`openDrawer`/`prefetchOtherPages`/`closeDrawer`とドロワーリンクのクリック処理・`pageshow`イベント処理は、[../01_index_予定管理.md](../01_index_予定管理.md)・[../03_Timetable/04_Timetable.js_その4_予定管理モーダル共通処理.md](../03_Timetable/04_Timetable.js_その4_予定管理モーダル共通処理.md)で見てきたものと同じ構造です。先読み対象のファイル一覧が、このページ自身（`StudyLog.js`）を除いた他ページのリストになっています。
 
 ---
 
@@ -20,7 +20,7 @@ function renderSubjectDropdown() {
   if (cSel) { cSel.innerHTML = SUBJECTS.map(sub => `<option value="${sub}">${sub}</option>`).join(""); }
 }
 ```
-- 手入力タブの科目選択と、タイマー確認画面の科目選択の**両方**を、同じ`SUBJECTS`（Discordのチャンネル一覧、[[01_StudyLog.js_その1_ログインとアカウント設定.md]]の`loadSubjects()`で取得）から更新します。この関数だけ`esc()`を通さずに`sub`をそのまま埋め込んでいますが、`SUBJECTS`はサーバーの`channels`APIから取得した科目名（Discordのチャンネル名）で、ユーザーが直接自由入力できる値ではないため、他の箇所と比べてエスケープが省略されていると考えられます。
+- 手入力タブの科目選択と、タイマー確認画面の科目選択の**両方**を、同じ`SUBJECTS`（Discordのチャンネル一覧、[01_StudyLog.js_その1_ログインとアカウント設定.md](01_StudyLog.js_その1_ログインとアカウント設定.md)の`loadSubjects()`で取得）から更新します。この関数だけ`esc()`を通さずに`sub`をそのまま埋め込んでいますが、`SUBJECTS`はサーバーの`channels`APIから取得した科目名（Discordのチャンネル名）で、ユーザーが直接自由入力できる値ではないため、他の箇所と比べてエスケープが省略されていると考えられます。
 
 ---
 
@@ -34,7 +34,7 @@ function escAttr(s) {
   return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 ```
-- `esc()`は本文用（`&`/`<`/`>`のみ）、`escAttr()`はそれに加えて`"`/`'`もエスケープする、属性値専用の版です。コメントに「備考等の自由入力にクォートが含まれていても`onclick`属性やHTML構造が壊れないようにするため」とあります。[[02_StudyLog.js_その2_ランキングと記録の描画.md]]の`renderLogs`で、削除ボタンの`data-log-time`属性に`escAttr(l.time)`が使われていたのはこのためです。
+- `esc()`は本文用（`&`/`<`/`>`のみ）、`escAttr()`はそれに加えて`"`/`'`もエスケープする、属性値専用の版です。コメントに「備考等の自由入力にクォートが含まれていても`onclick`属性やHTML構造が壊れないようにするため」とあります。[02_StudyLog.js_その2_ランキングと記録の描画.md](02_StudyLog.js_その2_ランキングと記録の描画.md)の`renderLogs`で、削除ボタンの`data-log-time`属性に`escAttr(l.time)`が使われていたのはこのためです。
 
 ---
 
@@ -49,7 +49,7 @@ let watchHashes = {
   completed: null, // 課題達成状況（get_completed_tasks・全ユーザー）
 };
 ```
-- [[../03_Timetable/04_Timetable.js_その4_予定管理モーダル共通処理.md]]と同じ、SHA-256ハッシュ比較の仕組みです。4種類のデータをまとめて`checkForUpdates()`で監視します。
+- [../03_Timetable/04_Timetable.js_その4_予定管理モーダル共通処理.md](../03_Timetable/04_Timetable.js_その4_予定管理モーダル共通処理.md)と同じ、SHA-256ハッシュ比較の仕組みです。4種類のデータをまとめて`checkForUpdates()`で監視します。
 
 ```js
 async function hashOfEndpoint(path) {
@@ -72,7 +72,7 @@ async function refreshWatchedData() {
   renderTasks();
 }
 ```
-- [[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md]]の`toggleTask()`が「達成する」ボタンを押した直後（サーバーからの返事を待っている間）は、`pendingTaskIds`にそのタスクIDが入っています。もしこのタイミングでバックグラウンドのポーリングがデータを丸ごと取り直して再描画してしまうと、まだサーバー側で確定していない古いデータで画面が一瞬上書きされてしまう可能性があります。そのため、送信中のタスクが1件でもあれば、このポーリングによる更新は**丸ごとスキップ**します。コメントにある通り、送信が完了すれば`toggleTask`自身が`renderAll()`を呼ぶので、更新が完全に取りこぼされる心配はありません。
+- [03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)の`toggleTask()`が「達成する」ボタンを押した直後（サーバーからの返事を待っている間）は、`pendingTaskIds`にそのタスクIDが入っています。もしこのタイミングでバックグラウンドのポーリングがデータを丸ごと取り直して再描画してしまうと、まだサーバー側で確定していない古いデータで画面が一瞬上書きされてしまう可能性があります。そのため、送信中のタスクが1件でもあれば、このポーリングによる更新は**丸ごとスキップ**します。コメントにある通り、送信が完了すれば`toggleTask`自身が`renderAll()`を呼ぶので、更新が完全に取りこぼされる心配はありません。
 
 ### 4.3 SSEとタイマー同期の統合（1813〜1832行）
 ```js
@@ -88,7 +88,7 @@ function startRealtimeUpdates() {
 startRealtimeUpdates();
 setInterval(checkForUpdates, 10000);
 ```
-- 通常のSSE通知に加えて、コメントに書かれている通り「勉強タイマーの同期（他端末での一時停止／再開、3時間ごとの自動休憩の検知）も同じSSE接続に相乗りさせる」という工夫がされています。`timerSyncInterval`が動いている（＝[[04_StudyLog.js_その4_タイマー機能.md]]の`startSyncPolling()`が既に呼ばれていて、タイマー画面が進行中の記録を表示している）ときだけ`syncTimerFromServer()`を呼ぶことで、「タイマーに関係あるときだけ同期する」という元々の条件を保ったまま、SSEによる即時反映の恩恵も受けられるようにしています。
+- 通常のSSE通知に加えて、コメントに書かれている通り「勉強タイマーの同期（他端末での一時停止／再開、3時間ごとの自動休憩の検知）も同じSSE接続に相乗りさせる」という工夫がされています。`timerSyncInterval`が動いている（＝[04_StudyLog.js_その4_タイマー機能.md](04_StudyLog.js_その4_タイマー機能.md)の`startSyncPolling()`が既に呼ばれていて、タイマー画面が進行中の記録を表示している）ときだけ`syncTimerFromServer()`を呼ぶことで、「タイマーに関係あるときだけ同期する」という元々の条件を保ったまま、SSEによる即時反映の恩恵も受けられるようにしています。
 - これにより、何らかのSSE通知（予定の変更でも、他の人の勉強記録でも、種類を問わず）が届くたびに、ついでにタイマーの状態も確認しに行く、という設計になっています。厳密には「タイマーの変化」以外の通知でも余分にタイマーAPIを呼んでしまう可能性がありますが、実装をシンプルに保つための割り切りと考えられます。
 
 ---

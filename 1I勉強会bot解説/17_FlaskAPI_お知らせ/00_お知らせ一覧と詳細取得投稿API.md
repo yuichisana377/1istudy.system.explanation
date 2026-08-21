@@ -1,6 +1,6 @@
 # お知らせのデータ層と一覧・詳細取得・投稿API（`bot.py` 5697〜5921行）
 
-対象：`bot.py`の「Flask API — お知らせ（notices）」セクション前半。[[../../1I勉強会web解説/06_Notice]]で見たお知らせページの、サーバー側の実装です。
+対象：`bot.py`の「Flask API — お知らせ（notices）」セクション前半。[../../1I勉強会web解説/06_Notice](../../1I勉強会web解説/06_Notice/00_HTML構造とその1_一覧と詳細表示.md)で見たお知らせページの、サーバー側の実装です。
 
 ## 1. ファイル名の検証と一覧取得（5697〜5722行）
 
@@ -17,7 +17,7 @@ def _is_safe_notice_filename(filename: str) -> bool:
         return False
     return filename.lower().endswith(NOTICE_ALLOWED_EXT)
 ```
-- これまでの各所で個別に書かれていたパストラバーサル対策が、[[../15_FlaskAPI_クイズ/02_ルーム作成と過去問ランキング.md]]の`_is_safe_deck_filename`と同じように、お知らせ専用の1つの関数にまとめられています。加えて拡張子（`.md`または`.txt`のみ）のチェックも兼ねています。
+- これまでの各所で個別に書かれていたパストラバーサル対策が、[../15_FlaskAPI_クイズ/02_ルーム作成と過去問ランキング.md](../15_FlaskAPI_クイズ/02_ルーム作成と過去問ランキング.md)の`_is_safe_deck_filename`と同じように、お知らせ専用の1つの関数にまとめられています。加えて拡張子（`.md`または`.txt`のみ）のチェックも兼ねています。
 
 ```python
 def list_notice_files():
@@ -81,7 +81,7 @@ def _notice_meta_entry_diff(filename, old_entry, new_entry):
     status = "added" if old_entry is None else ("deleted" if new_entry is None else "modified")
     return {"file": NOTICES_META_FILE, "diff": diff, "status": status}
 ```
-- [[../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md]]の`_card_index_diff`と同じパターンの、お知らせメタ情報専用版です。コメントの通り、以前は「お知らせ本体のファイル」の変更しか運用ログに出ておらず、実は同時に書き換わっている`notices_meta.json`側の変更（誰が投稿したか、など）が記録から漏れていた、という抜けを埋めるために追加されています。
+- [../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)の`_card_index_diff`と同じパターンの、お知らせメタ情報専用版です。コメントの通り、以前は「お知らせ本体のファイル」の変更しか運用ログに出ておらず、実は同時に書き換わっている`notices_meta.json`側の変更（誰が投稿したか、など）が記録から漏れていた、という抜けを埋めるために追加されています。
 
 ## 3. `/list_notices`：一覧取得（5774〜5795行）
 
@@ -121,7 +121,7 @@ def get_notice():
     m = meta.get(filename, {})
     return jsonify({"ok": True, "filename": filename, "content": content, "uploader": m.get("uploader"), "uploaded_at": m.get("uploaded_at")})
 ```
-- ファイル本文をそのままテキストとして読み込み返します。[[../06_Notice/00_HTML構造とその1_一覧と詳細表示.md|Web解説シリーズのNotice.js解説]]で見た通り、この本文はフロント側でMarkdownとしてレンダリングされる際に、必ず`textContent`/DOM APIを使った安全な組み立て方がされます（サーバー側は特に無害化処理をせず、生のテキストをそのまま返しています）。
+- ファイル本文をそのままテキストとして読み込み返します。[Web解説シリーズのNotice.js解説](../../1I勉強会web解説/06_Notice/00_HTML構造とその1_一覧と詳細表示.md)で見た通り、この本文はフロント側でMarkdownとしてレンダリングされる際に、必ず`textContent`/DOM APIを使った安全な組み立て方がされます（サーバー側は特に無害化処理をせず、生のテキストをそのまま返しています）。
 
 ## 5. `/upload_notice`：アップロード（5825〜5921行）
 
@@ -168,7 +168,7 @@ def upload_notice():
     except OSError as e:
         return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
 ```
-- お知らせ本文の保存は、これまで見てきたJSONファイルとは違い、`local_put`（JSON形式で保存）ではなく、**プレーンテキストとして直接ファイルに書き込んでいます**（お知らせの中身自体はMarkdown/プレーンテキストなので、JSONに包む必要が無いためです）。ただし、`tmp_path`に書いてから`os.replace`ですり替える、という[[../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md]]で見た**アトミックな書き込み**のテクニックは、ここでも同じように使われています。
+- お知らせ本文の保存は、これまで見てきたJSONファイルとは違い、`local_put`（JSON形式で保存）ではなく、**プレーンテキストとして直接ファイルに書き込んでいます**（お知らせの中身自体はMarkdown/プレーンテキストなので、JSONに包む必要が無いためです）。ただし、`tmp_path`に書いてから`os.replace`ですり替える、という[../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md](../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md)で見た**アトミックな書き込み**のテクニックは、ここでも同じように使われています。
 
 ```python
     meta_change = None
@@ -189,7 +189,7 @@ def upload_notice():
     except DataWriteError as e:
         print(f"[WARN] notices_meta の更新に失敗しました: {e}")
 ```
-- `uploader`（表示名、後で変更されうる）と`uploader_id`（学籍番号、本人特定の唯一の正しい手がかり）が明確に区別されています。コメントの通り「uploaderは表示名（ニックネーム）で改名され得るため、本人特定にはこちらを使う」という考え方は、[[../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md]]の`published_by.id`と全く同じ設計思想です。
+- `uploader`（表示名、後で変更されうる）と`uploader_id`（学籍番号、本人特定の唯一の正しい手がかり）が明確に区別されています。コメントの通り「uploaderは表示名（ニックネーム）で改名され得るため、本人特定にはこちらを使う」という考え方は、[../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md](../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md)の`published_by.id`と全く同じ設計思想です。
 - `uploader_id`は`_notice_meta_entry_lines`（運用ログの表示用整形関数）には**含まれていません**。コメントの通り、これはDiscord IDと同じ扱いで、ニックネーム以上に個人を特定できる情報を、誰でも見られる公開の運用ログに出さない、という一貫した方針です。
 
 ```python
@@ -212,8 +212,8 @@ def upload_notice():
     return jsonify({"ok": True, "filename": filename, "is_update": is_update, "uploader": uploader})
 ```
 - Discordへの通知先は、コメントの通り「お知らせ用」チャンネル（`notice_channel_id`）を優先し、未設定なら通生用チャンネル（`remind_channel_id`）にフォールバックします。
-- `detail = [c for c in (change, meta_change) if c]`… [[../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md]]の`/save_cards`と同じ、「本体ファイルの差分」と「メタ情報ファイルの差分」の両方を運用ログにまとめて渡すパターンです。
+- `detail = [c for c in (change, meta_change) if c]`… [../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md](../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md)の`/save_cards`と同じ、「本体ファイルの差分」と「メタ情報ファイルの差分」の両方を運用ログにまとめて渡すパターンです。
 
 ---
 
-次は、お知らせの削除（作成者確認込み）と「実行済み」フラグの管理を解説します。 → [[01_お知らせ削除と実行済みフラグ.md]]
+次は、お知らせの削除（作成者確認込み）と「実行済み」フラグの管理を解説します。 → [01_お知らせ削除と実行済みフラグ.md](01_お知らせ削除と実行済みフラグ.md)

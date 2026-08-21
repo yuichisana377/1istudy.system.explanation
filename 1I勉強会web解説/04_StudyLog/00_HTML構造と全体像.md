@@ -8,7 +8,7 @@
 - **タイマー**：実際に時間を計測しながら記録（開始・休憩・停止、複数端末同期対応）
 - **課題**：予定管理で登録された「提出」「宿題」を一覧表示し、達成するとポイントがもらえる
 
-さらに、他ページ共通の「アカウント設定（ニックネーム変更・Discord連携・パスワード変更）」モーダルの実装も、実はこのファイルにしかありません（他ページからは`/StudyLog.html?openAccount=1`というURLで、このページに来てモーダルを自動で開かせる形になっています。[[../01_index_予定管理.md]]の`renderDrawerAccount`でも触れた内容です）。
+さらに、他ページ共通の「アカウント設定（ニックネーム変更・Discord連携・パスワード変更）」モーダルの実装も、実はこのファイルにしかありません（他ページからは`/StudyLog.html?openAccount=1`というURLで、このページに来てモーダルを自動で開かせる形になっています。[../01_index_予定管理.md](../01_index_予定管理.md)の`renderDrawerAccount`でも触れた内容です）。
 
 ## `StudyLog.html` の構造（ざっくり）
 
@@ -23,4 +23,4 @@
 | 298〜310 | `#tab-tasks` | 課題一覧 |
 | 312〜317 | JS読み込み | `Icons.js → SwipeGuard.js → Dialog.js → Dropdown.js → StudyLog.js（本体） → PendingDeleteCheck.js` |
 
-続きは[[01_StudyLog.js_その1_ログインとアカウント設定.md]]から`StudyLog.js`を解説します。
+続きは[01_StudyLog.js_その1_ログインとアカウント設定.md](01_StudyLog.js_その1_ログインとアカウント設定.md)から`StudyLog.js`を解説します。

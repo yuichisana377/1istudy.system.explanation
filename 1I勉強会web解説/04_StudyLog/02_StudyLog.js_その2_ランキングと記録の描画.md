@@ -1,6 +1,6 @@
 # StudyLog.js その2：起動処理・週間ランキング・ホーム画面の描画（273〜1022行）
 
-[[01_StudyLog.js_その1_ログインとアカウント設定.md]]の続きです。
+[01_StudyLog.js_その1_ログインとアカウント設定.md](01_StudyLog.js_その1_ログインとアカウント設定.md)の続きです。
 
 ---
 
@@ -31,7 +31,7 @@ window.addEventListener("load", function() {
 ```
 - コメントに、体感速度を上げるための工夫が説明されています：「『ログ一覧』の表示が、ポイント・達成済み課題・全ユーザー名簿など他のデータ取得が終わるまで待たされていて遅く感じられていた。`renderLogs()`は`logs`（`loadLogs()`の結果）だけで描画できるので、他の読み込みを待たず最優先で取得し、届いた時点ですぐ表示する」。
 - `const logsPromise = loadLogs();`で発行した通信の`Promise`を、`.then(renderLogs)`（届き次第すぐ描画）と、`Promise.all([logsPromise, ...])`（他の読み込みと合わせて全部揃ってからもう一度描画）の**両方で使い回しています**。同じ`loadLogs()`を2回呼ぶと通信が重複してしまいますが、1回発行した`Promise`は何度でも`.then`で結果を受け取れるという性質を利用して、二重フェッチを避けながら「届いたらすぐ」と「全部揃ったら最終的に正しく」の両方を実現しています。
-- `if (new URLSearchParams(location.search).get("openAccount")) openAccountModal();`：[[00_HTML構造と全体像.md]]で触れた、他ページの「アカウント設定」リンクから`?openAccount=1`付きでこのページに来た場合の自動オープン処理です。
+- `if (new URLSearchParams(location.search).get("openAccount")) openAccountModal();`：[00_HTML構造と全体像.md](00_HTML構造と全体像.md)で触れた、他ページの「アカウント設定」リンクから`?openAccount=1`付きでこのページに来た場合の自動オープン処理です。
 
 ```js
 function applySession() {
@@ -52,7 +52,7 @@ function attachAccountClickHandlers() {
   });
 }
 ```
-- ヘッダーのアバター・ニックネーム・学籍番号の3つの要素それぞれに、クリックで[[01_StudyLog.js_その1_ログインとアカウント設定.md]]の`openAccountModal()`を開くよう仕込みます。コメントによれば、以前は専用の「⚙アカウント」ボタンがありましたが、今はヘッダーの表示自体をタップできるようにする方式に変わり、その名残の古いボタンを`hideLegacyAccountButton()`で隠す処理も残っています。
+- ヘッダーのアバター・ニックネーム・学籍番号の3つの要素それぞれに、クリックで[01_StudyLog.js_その1_ログインとアカウント設定.md](01_StudyLog.js_その1_ログインとアカウント設定.md)の`openAccountModal()`を開くよう仕込みます。コメントによれば、以前は専用の「⚙アカウント」ボタンがありましたが、今はヘッダーの表示自体をタップできるようにする方式に変わり、その名残の古いボタンを`hideLegacyAccountButton()`で隠す処理も残っています。
 
 ---
 
@@ -67,7 +67,7 @@ function getWeekRange() {
   return { mon: mon, sun: sun };
 }
 ```
-- 今週の月曜0:00と日曜23:59:59を求める関数です。`diff = day === 0 ? -6 : 1 - day`は、[[../03_Timetable/01_Timetable.js_その1_週表示と月間カレンダー.md]]で見た「今週の月曜日を求める」計算と同じ考え方を、日曜日を`0`とする`getDay()`の値から直接「月曜日までの日数差」として計算する書き方です（日曜日なら6日**戻る**ので`-6`、それ以外の曜日なら`1 - day`日進める/戻る）。
+- 今週の月曜0:00と日曜23:59:59を求める関数です。`diff = day === 0 ? -6 : 1 - day`は、[../03_Timetable/01_Timetable.js_その1_週表示と月間カレンダー.md](../03_Timetable/01_Timetable.js_その1_週表示と月間カレンダー.md)で見た「今週の月曜日を求める」計算と同じ考え方を、日曜日を`0`とする`getDay()`の値から直接「月曜日までの日数差」として計算する書き方です（日曜日なら6日**戻る**ので`-6`、それ以外の曜日なら`1 - day`日進める/戻る）。
 - `getThisWeekLogs()`はこの範囲を使って、全ログから今週分だけを絞り込みます。
 
 ---
@@ -238,7 +238,7 @@ function initMyLogsEvents() {
   });
 }
 ```
-- これは[[../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md]]で紹介した「イベント委任」パターンです。一覧全体（`#log-list`）に1回だけクリックリスナーを登録し、実際にクリックされた場所が削除ボタンかどうかを`closest`で判定します。コメントには「一度だけ登録すればOK」という理由に加え、`initTaskListEvents`のコメントに「inline `onclick`に生のIDや文字列を直接埋め込むと、内容に引用符（`'`や`"`）が含まれた場合にHTML/JSが壊れてボタンが反応しなくなる」という重要な注記があります。もし削除対象を`onclick="deleteMyLog('${l.time}')"`のように直接文字列として埋め込んでいたら、時刻データや科目名にたまたま引用符が含まれるだけでこのHTMLごと壊れてしまいます。データ属性＋イベント委任の組み合わせは、この種の事故を避けるための安全な設計です。
+- これは[../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md](../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md)で紹介した「イベント委任」パターンです。一覧全体（`#log-list`）に1回だけクリックリスナーを登録し、実際にクリックされた場所が削除ボタンかどうかを`closest`で判定します。コメントには「一度だけ登録すればOK」という理由に加え、`initTaskListEvents`のコメントに「inline `onclick`に生のIDや文字列を直接埋め込むと、内容に引用符（`'`や`"`）が含まれた場合にHTML/JSが壊れてボタンが反応しなくなる」という重要な注記があります。もし削除対象を`onclick="deleteMyLog('${l.time}')"`のように直接文字列として埋め込んでいたら、時刻データや科目名にたまたま引用符が含まれるだけでこのHTMLごと壊れてしまいます。データ属性＋イベント委任の組み合わせは、この種の事故を避けるための安全な設計です。
 - `el.dataset.boundClick`というフラグで、この関数が複数回呼ばれても、リスナーが二重に登録されないようにしています。
 
 ```js
@@ -304,7 +304,7 @@ var btnLabel = pending ? '<span class="sl-spinner" ...></span>送信中…' : (d
 var noteDot  = t.note ? ('<span class="note-dot" title="備考あり">' + Icons.html('memo', {size:13}) + '</span>') : '';
 var noteHtml = t.note ? '<div class="sl-task-note">' + esc(t.note) + '</div>' : '';
 ```
-- コメントに「備考は普段は隠しておき、タップで表示する（[[../01_index_予定管理.md]]の詳細表示と同じ考え方）」とあります。備考の中身自体はHTMLとして最初から埋め込んでおき、CSSの`display`ではなく専用のクラス（`open`）の有無で開閉を切り替える方式です（`toggleTaskNote`、下記）。
+- コメントに「備考は普段は隠しておき、タップで表示する（[../01_index_予定管理.md](../01_index_予定管理.md)の詳細表示と同じ考え方）」とあります。備考の中身自体はHTMLとして最初から埋め込んでおき、CSSの`display`ではなく専用のクラス（`open`）の有無で開閉を切り替える方式です（`toggleTaskNote`、下記）。
 
 ```js
 function initTaskListEvents() {
@@ -324,8 +324,8 @@ function toggleTaskNote(bodyEl) {
   noteEl.classList.toggle("open");
 }
 ```
-- 課題リストも7節と同じイベント委任パターンです。「達成する」ボタンがクリックされたか、備考付きの本文（`.has-note`）がクリックされたかを`closest`で振り分け、それぞれ`toggleTask`（[[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md]]で解説）と`toggleTaskNote`（備考の開閉）を呼び分けます。
+- 課題リストも7節と同じイベント委任パターンです。「達成する」ボタンがクリックされたか、備考付きの本文（`.has-note`）がクリックされたかを`closest`で振り分け、それぞれ`toggleTask`（[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)で解説）と`toggleTaskNote`（備考の開閉）を呼び分けます。
 
 ---
 
-続きは[[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md]]で、タブ切り替え・手入力での記録・課題の達成処理を解説します。
+続きは[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)で、タブ切り替え・手入力での記録・課題の達成処理を解説します。

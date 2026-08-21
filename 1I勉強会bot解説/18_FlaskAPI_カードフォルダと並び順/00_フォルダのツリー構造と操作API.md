@@ -1,6 +1,6 @@
 # カードのフォルダ機能（`bot.py` 6042〜6242行）
 
-対象：`bot.py`の「Flask API — カードのフォルダ（みんなで共有）」セクションと「『クイズ過去問』フォルダ」セクション。[[../../1I勉強会web解説/02_Cardmaker]]で見たCardMakerのフォルダ階層の、サーバー側実装です。
+対象：`bot.py`の「Flask API — カードのフォルダ（みんなで共有）」セクションと「『クイズ過去問』フォルダ」セクション。[../../1I勉強会web解説/02_Cardmaker](../../1I勉強会web解説/02_Cardmaker/00_HTML構造とページ全体像.md)で見たCardMakerのフォルダ階層の、サーバー側実装です。
 
 ## 1. データの形と運用ログ整形（6045〜6070行）
 
@@ -96,7 +96,7 @@ def generate_folder_id():
 
 ## 3. 「クイズ過去問」フォルダという特別な仕組み（6107〜6136行）
 
-コメントの通り、これは[[../15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md]]の`_archive_manual_quiz`が使う、システムが自動管理する固定のフォルダです。
+コメントの通り、これは[../15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md](../15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md)の`_archive_manual_quiz`が使う、システムが自動管理する固定のフォルダです。
 
 ```python
 QUIZ_ARCHIVE_FOLDER_ID   = "quiz_archive_root"
@@ -156,7 +156,7 @@ def save_folder():
 ```
 - `id`が送られてきたかどうかで、既存フォルダの「改名／移動」か「新規作成」かを1つのAPIで兼ねています（これまでのCRUD系APIと同じパターンです）。
 - **改名・移動の分岐**：`QUIZ_ARCHIVE_FOLDER_ID`自身は、名前も親も変更できないようガードされています（`name != target.get("name") or parent_id != target.get("parent_id")`で「何か実際に変えようとしているか」を確認し、変えようとしていなければ通す＝単なる無変化の保存リクエストまでは拒否しません）。
-- `parent_id != target.get("parent_id"):`（親が実際に変わる場合だけ）に、`_can_move_folder_to`（前述のツリー演算）と`_is_in_archive_scope`（クイズ過去問フォルダの外に出さない制約。[[../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md]]の`/save_cards`で見たデッキの移動制限と対になる、フォルダ自体の移動制限です）の両方を確認します。
+- `parent_id != target.get("parent_id"):`（親が実際に変わる場合だけ）に、`_can_move_folder_to`（前述のツリー演算）と`_is_in_archive_scope`（クイズ過去問フォルダの外に出さない制約。[../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md](../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md)の`/save_cards`で見たデッキの移動制限と対になる、フォルダ自体の移動制限です）の両方を確認します。
 - **新規作成の分岐**：`_folder_level(folders, parent_id) >= MAX_FOLDER_DEPTH`で、これから作るフォルダの深さが既に上限に達していないかを確認します。
 
 ```python
@@ -186,4 +186,4 @@ def delete_folder():
 
 ---
 
-次は、この`folders.json`を含む、デッキ・フォルダの並び順（`list_order.json`）を管理するAPIを解説します。 → [[01_並び順の管理API.md]]
+次は、この`folders.json`を含む、デッキ・フォルダの並び順（`list_order.json`）を管理するAPIを解説します。 → [01_並び順の管理API.md](01_並び順の管理API.md)

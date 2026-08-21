@@ -1,6 +1,6 @@
 # Cardmaker.js その2：デッキ一覧の描画とフォルダ操作（812〜1523行）
 
-[[01_Cardmaker.js_その1_ログインとデータ管理.md]]の続きです。
+[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)の続きです。
 
 ---
 
@@ -17,7 +17,7 @@ renderInProgressUI();
 const skeleton = document.getElementById('deck-skeleton');
 if (skeleton) skeleton.style.display = 'none';
 ```
-- ドラッグ並び替え中（`cmListDragActive`）なら何もせず終了（[[01_Cardmaker.js_その1_ログインとデータ管理.md]]で説明した理由）。
+- ドラッグ並び替え中（`cmListDragActive`）なら何もせず終了（[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)で説明した理由）。
 - 今見ているフォルダが（他の端末での削除などにより）もう存在しなければ、ホーム（`null`）に強制的に戻す。
 - パンくずリスト（今どのフォルダの中にいるかの表示）とプレイ中セクションを更新。
 - JS読み込み前から見えている「読み込み中…」風の**スケルトン**（骨組みだけの仮表示、実データが来る前に「なんとなくこんな形」というプレースホルダーを見せておく手法）を、初回描画が終わった時点で隠す。
@@ -27,7 +27,7 @@ if (skeleton) skeleton.style.display = 'none';
 
 ### 1.3 フォルダのカードを組み立てる（844〜884行）
 `childFolders.map(f => {...})`で、フォルダ1つごとに表示用のHTML片を作ります。
-- `countDecksRecursive`/`countCardsRecursive`/`countUnsureRecursive`（[[01_Cardmaker.js_その1_ログインとデータ管理.md]]参照）で、そのフォルダ配下の合計デッキ数・カード数・「わからない」件数を計算。
+- `countDecksRecursive`/`countCardsRecursive`/`countUnsureRecursive`（[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)参照）で、そのフォルダ配下の合計デッキ数・カード数・「わからない」件数を計算。
 - **クイズ用デッキ選択モード（`pickMode`）中は特別な見た目**：通常の「▶プレイ」「メニュー」ボタンの代わりに、チェックボックス風の見た目でフォルダ全体を選択できるようにします。選択対象にできるデッキが1件も無いフォルダはグレーアウト（`disabled`）。
 - 通常モードでは、フォルダ名・件数に加えて「▶プレイ」ボタン（フォルダ内を一括で学習）と「メニュー」ボタン（名前変更・移動・削除）を表示します。
 - それぞれのフォルダに`key: 'folder:フォルダID'`という並び順管理用のキーを持たせています。
@@ -64,7 +64,7 @@ const dedupedItems = combinedItems.filter(it => {
 });
 grid.innerHTML = dedupedItems.map(it => it.html).join('');
 ```
-- `applySavedListOrder`（[[01_Cardmaker.js_その1_ログインとデータ管理.md]]）で、ユーザーがドラッグして決めた並び順を適用。
+- `applySavedListOrder`（[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）で、ユーザーがドラッグして決めた並び順を適用。
 - 最後に、同じキー（＝同じデッキ／フォルダ）を持つ項目が万一2件以上並んでいた場合でも、最初の1件だけを残して残りを除外する「最終防御」を入れています。コメントによれば、これは「並び順マージ処理などに未知の不具合があっても、画面上に同じ項目が2つ表示される、という見た目の破綻だけは常に防ぐため」の保険です。
 
 ---
@@ -103,7 +103,7 @@ function onSearchInput() {
 ```
 - これは検索機能そのものの実装ではなく、「まだ検索用のファイル（`Cardmaker-search.js`）が読み込まれていないときの、一時的な代役」です。
 - HTMLの`onclick="openSearchScreen()"`のようなボタンは、この関数を最初に呼び出します。この関数は`Cardmaker-search.js`を読み込み終わるまで待ってから、**もう一度自分自身と同じ名前の関数を呼び出します**。実は`Cardmaker-search.js`が読み込まれると、その中で改めて`openSearchScreen`という同じ名前の（今度は本物の）関数が定義され、こちらの仮の実装を**上書き**します。そのため2回目の呼び出しでは、すでに本物の実装が動く、という仕組みです。
-- 詳しい仕組みは[[08_Cardmaker.js_その8_画像処理と基盤機能.md]]の`loadChunk`/`loadChunkWithFeedback`の節で説明します。
+- 詳しい仕組みは[08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)の`loadChunk`/`loadChunkWithFeedback`の節で説明します。
 
 ---
 
@@ -126,7 +126,7 @@ function getInProgressItems(scopeFolderId) {
   return recentItems;
 }
 ```
-- 学習の途中経過（`studyDataCache.progress`、[[06_Cardmaker.js_その6_カード編集と学習データ同期.md]]で説明）を全部調べ、「まだ存在するデッキ/フォルダ」「表示範囲内」「直近1週間以内に触っていた」の3条件を満たすものだけを、最近触った順に並べて返します。
+- 学習の途中経過（`studyDataCache.progress`、[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)で説明）を全部調べ、「まだ存在するデッキ/フォルダ」「表示範囲内」「直近1週間以内に触っていた」の3条件を満たすものだけを、最近触った順に並べて返します。
 - `renderInProgressUI()`（1097〜1121行）はこれを実際にホーム画面の「▶️ プレイ中のデッキ」欄に描画する関数です。進捗バー（`〇問中△問目`をパーセントに変換）付きのカードを並べ、最後に`renderCompletedUI()`（下記）も一緒に呼び出します。
 
 ### 4.2 「プレイ済み（完了）」の一覧（1123〜1179行）
@@ -188,7 +188,7 @@ async function saveFolderName() {
 }
 ```
 - 名前が空なら`shake()`（入力欄を左右に揺らすアニメーション、8節参照）で気づかせて中断。
-- `warnIfBugChars`（[[08_Cardmaker.js_その8_画像処理と基盤機能.md]]で説明）で、表示や処理を壊しかねない特殊文字が含まれていないかチェック。
+- `warnIfBugChars`（[08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)で説明）で、表示や処理を壊しかねない特殊文字が含まれていないかチェック。
 - `AbortSignal.timeout(8000)`は`AbortController`を使わずタイムアウトを指定する、より簡潔な書き方（8秒でタイムアウト）。
 - 成功したらサーバーの最新フォルダ一覧を取り直し、モーダルを閉じて画面を再描画。失敗したら`try/catch`で捕まえてエラーダイアログを表示（`finally`でボタンのローディング状態を必ず解除）。
 
@@ -229,11 +229,11 @@ function renderMovePickerList() {
 }
 ```
 - `walk(parentId, level)`という**自分自身をもう一度呼び出す関数（再帰関数）**で、フォルダの階層構造をたどりながら、フォルダツリー全体をインデント付き（`level`が深いほど`padding-left`を大きく）の1本のリストに展開しています。
-- 各行について、移動先として選べるかどうか（`canMoveFolderTo`/`canMoveDeckTo`、[[01_Cardmaker.js_その1_ログインとデータ管理.md]]の条件）を判定し、選べない行は`disabled`のスタイルにしてクリックできないようにします。
+- 各行について、移動先として選べるかどうか（`canMoveFolderTo`/`canMoveDeckTo`、[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)の条件）を判定し、選べない行は`disabled`のスタイルにしてクリックできないようにします。
 - コメントにある通り、アイコン（固定のSVG文字列）とフォルダ名（ユーザー入力）は別々に扱い、フォルダ名だけを`esc()`に通しています。もしアイコンごと`esc()`してしまうと、SVGタグの`<`や`>`まで文字列としてエスケープされてしまい、アイコンが正しく描画されなくなるためです。
 
 `selectMoveTarget(targetId)`（1471〜1513行）は実際に移動を実行する関数です。デッキの移動では、公開済みデッキの場合、移動前に必ずサーバーから最新のカード本体を取り直す（`loadDeckCardsWithRecovery`）処理が入っています。これは「移動しようとしたら、実は誰かが直前にそのデッキを更新していた」というケースに対応するためです。フォルダの移動は、名前はそのままで`parent_id`（親フォルダ）だけを変えて`/save_folder`に送ります。
 
 ---
 
-続きは[[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md]]で、`fetchAndMergeDecks()`（サーバーからのデッキ取得）以降を解説します。
+続きは[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)で、`fetchAndMergeDecks()`（サーバーからのデッキ取得）以降を解説します。
