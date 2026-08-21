@@ -106,29 +106,56 @@ function switchTTMode(mode) {
 - 「授業変更」「1コマ休み」「曜日変更」「休校設定」の4タブを切り替える中心の関数です。4つの入力欄ブロックのうち、選ばれたタブに対応するものだけを表示し、他は隠します。
 - 「時限」の選択欄は、「授業変更」と「1コマ休み」の2つのモードでだけ使う（曜日変更・終日休校は時限を問わない操作のため）ので、それに合わせて表示・非表示を切り替えます。
 
-### 3.2 曜日変更のプレビュー：`renderDayChangePreview(dateStr)`（876〜920行）
+### 3.2 曜日変更のプレビュー：`renderDayChangePreview(dateStr)`（878〜920行）
 「曜日変更」タブは、「今日は金曜日だけど、月曜日の時間割で授業をする」といった状況（台風による日程調整などを想定）のためのモードです。コピー元の曜日を選ぶと、実際に入れ替わる内容をプレビュー表示します。
 
 ```js
-const isMulti = document.getElementById('tt-edit-multi')?.checked;
-if (isMulti) {
-  const endDate = calState['tt-edit-end']?.selected;
-  container.innerHTML = `... ${dateStr} 〜 ${endDate || '（終了日未選択）'} の期間中の平日すべてに、${DAY_KEY_LABEL[sourceDayKey]}曜日の時間割を適用します（土日は自動的にスキップされます） ...`;
-  return;
+function renderDayChangePreview(dateStr) {
+  const container = document.getElementById('tt-day-change-preview');
+  if (!container) return;
+
+  const sourceSel = document.getElementById('tt-day-change-source');
+  const sourceDayKey = sourceSel ? sourceSel.value : '';
+  if (!sourceDayKey) {
+    container.innerHTML = '<div style="font-size:13px;color:var(--text-tertiary)">コピー元の曜日を選択してください</div>';
+    return;
+  }
+
+  // ★ 複数日モード（夏休みなど）の場合は、範囲全体への適用であることを説明するだけにする
+  const isMulti = document.getElementById('tt-edit-multi')?.checked;
+  if (isMulti) {
+    const endDate = calState['tt-edit-end']?.selected;
+    container.innerHTML = `<div style="font-size:13px;color:var(--text-tertiary)">
+      ${dateStr} 〜 ${endDate || '（終了日未選択）'} の期間中の平日すべてに、${DAY_KEY_LABEL[sourceDayKey]}曜日の時間割を適用します（土日は自動的にスキップされます）
+    </div>`;
+    return;
+  }
+
+  const targetDayKey = dateToDayKey(dateStr);
+  if (!targetDayKey) {
+    container.innerHTML = '<div style="font-size:13px;color:var(--text-tertiary)">土日は選択できません</div>';
+    return;
+  }
+
+  const targetPeriods = getTimetableForDate(dateStr)[targetDayKey] || [];
+  const sourcePeriods = getTimetableForDate(dateStr)[sourceDayKey] || [];
+
+  const rows = targetPeriods.map((_, i) => {
+    const periodNum = i + 1;
+    const src = sourcePeriods[i];
+    const subjectText = src ? src.subject : '（コマなし・空きコマ扱い）';
+    return `<div class="day-change-row" style="margin-bottom:6px;padding:6px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;display:flex;justify-content:space-between">
+      <span>${periodNum}限</span><span style="color:var(--text)">${subjectText}</span>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = `<div style="font-size:12px;color:var(--text-tertiary);margin-bottom:6px">
+    ${DAY_KEY_LABEL[targetDayKey]}曜日（${dateStr}）が ${DAY_KEY_LABEL[sourceDayKey]}曜日の時間割になります
+  </div>${rows}`;
 }
 ```
+- コピー元の曜日が選ばれていなければ「コピー元の曜日を選択してください」とだけ表示して終わります。
 - 複数日モードのときは、1日ごとの詳細なプレビューではなく「この期間の平日すべてに適用します」という簡単な説明文だけを表示します（対象日数が多くなりうるため、1日ずつのプレビューは現実的でないからだと考えられます）。
-
-```js
-const targetPeriods = getTimetableForDate(dateStr)[targetDayKey] || [];
-const sourcePeriods = getTimetableForDate(dateStr)[sourceDayKey] || [];
-const rows = targetPeriods.map((_, i) => {
-  const periodNum = i + 1;
-  const src = sourcePeriods[i];
-  const subjectText = src ? src.subject : '（コマなし・空きコマ扱い）';
-  return `<div ...>${periodNum}限　${subjectText}</div>`;
-}).join('');
-```
 - 単一日モードのときは、実際の時限ごとに「入れ替え後どうなるか」を1行ずつ表示します。**対象日の元々のコマ数（`targetPeriods.length`）を基準にループする**点がポイントです。もしコピー元の曜日にそのコマ数分の授業が無ければ（例えば月曜が4コマ、金曜が5コマの場合）、「コマなし・空きコマ扱い」と表示されます。
 
 ---
