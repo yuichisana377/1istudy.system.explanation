@@ -47,14 +47,19 @@ function onPointerDown(e) {
   if (dragEl) return; // 既に別の指・別のポインタでドラッグ中
   const item = e.target.closest('.deck-card');
   if (!item || item.parentElement !== grid) return;
+  // ▶プレイ／✏️メニューなどのボタンから始まった場合は、通常のタップ操作を優先する
   if (e.target.closest('button, .btn, .icon-btn, a')) return;
-  ...
-}
+
+  pressItem = item;
+  pressPointerId = e.pointerId;
+  pressStartX = e.clientX;
+  pressStartY = e.clientY;
 ```
 - マウスなら左クリック以外は無視、すでに別の指でドラッグ中なら無視。押された場所が「▶プレイ」「メニュー」などのボタンの上だった場合も、通常のタップ操作を優先してドラッグ判定には入りません（`closest('button, .btn, ...')`で、押された要素の祖先にボタンが無いか確認）。
+- `pressItem`/`pressPointerId`/`pressStartX`/`pressStartY`… まだ「長押しが確定したかどうか分からない」様子見の段階の情報を控えておきます。指がどの部品の、どの指（`pointerId`）で、どの座標から始まったかを覚えておくことで、後で「長押しが成立したか」「動きすぎてキャンセルすべきか」を判定できるようにします。
 
 ```js
-cmListDragActive = true;
+    cmListDragActive = true;
 ```
 - 重要な点として、**長押しがまだ確定していない「様子見」の段階から**すでに`cmListDragActive`を立てています。コメントによれば、これをしないと、長押し確定前の待ち時間中にバックグラウンドの自動更新が一覧を再描画してしまい、掴もうとしていた要素が新しいDOMから浮いた「孤立した古い要素」になってしまう、という不具合（デッキが一時的に2つ表示される）が起きるためです。
 
@@ -89,21 +94,27 @@ pressTimer = setTimeout(() => {
 
 ## 3. ドラッグの開始・移動・終了（2524〜2794行）
 
-### 3.1 `beginDrag(item, clientY, initialDy)`（2524〜2542行）
+### 3.1 `beginDrag(item, clientY, initialDy)`（2540〜2558行）
 ```js
-dragEl = item;
-cmListDragActive = true;
-startY = clientY - initialDy;
-...
-dragEl.classList.add('dragging');
-dragEl.style.position = 'relative';
-dragEl.style.zIndex = '10';
-dragEl.style.boxShadow = '0 6px 18px rgba(0,0,0,.20)';
-dragEl.style.opacity = '0.92';
-dragEl.style.touchAction = 'none';
-dragEl.style.transform = `translateY(${initialDy}px) scale(1.02)`;
-if (navigator.vibrate) navigator.vibrate(12);
-if (autoScrollRAF === null) autoScrollRAF = requestAnimationFrame(autoScrollTick);
+function beginDrag(item, clientY, initialDy) {
+  initialDy = initialDy || 0; // ★ 追加：フォルダ切り替え直後の再開時、指の位置とカードの見た目を
+                               //   一致させるための初期オフセット（通常の掴み始めは0でよい）
+  dragEl = item;
+  cmListDragActive = true; // ★ ドラッグ中は renderDeckListUI() 側で再描画をスキップさせる
+  startY = clientY - initialDy;
+  lastClientY = clientY;
+  dragOriginY = clientY; // ★ 追加：自動スクロール発動判定の基準点
+  scrollParent = findScrollParent(grid);
+  dragEl.classList.add('dragging');
+  dragEl.style.position = 'relative';
+  dragEl.style.zIndex = '10';
+  dragEl.style.boxShadow = '0 6px 18px rgba(0,0,0,.20)';
+  dragEl.style.opacity = '0.92';
+  dragEl.style.touchAction = 'none';
+  dragEl.style.transform = `translateY(${initialDy}px) scale(1.02)`;
+  if (navigator.vibrate) navigator.vibrate(12); // ★ つかんだ瞬間に軽い振動でフィードバック（対応端末のみ）
+  if (autoScrollRAF === null) autoScrollRAF = requestAnimationFrame(autoScrollTick);
+}
 ```
 - 掴んだカードに影を付けて少し浮かせ、わずかに拡大表示（`scale(1.02)`）して「今これを掴んでいます」と分かるようにします。対応端末では12ミリ秒の短い振動も鳴らします。
 - `initialDy`という引数は普段は0ですが、後述の「フォルダを自動で開いて掴んだままドラッグを続ける」処理（5節）のときだけ、指の位置とカードの見た目がずれないようにするための補正値として使われます。
@@ -159,7 +170,7 @@ const orderedKeys = getItems().map(it => it.dataset.key);
 saveListOrder(currentFolderId, orderedKeys);
 if (orderedKeys.some(isSharedOrderKey)) {
   pushSharedOrderToServer(currentFolderId, orderedKeys).then(ok => {
-    if (!ok) showBanner('並び替えのサーバー反映に失敗しました（この端末には保存済み）', ...);
+    if (!ok) showBanner('並び替えのサーバー反映に失敗しました（この端末には保存済み）', '#fffbeb', '#92400e', Icons.html('warning', {size:15}));
   });
 }
 cmDragJustEndedAt = Date.now();
@@ -177,17 +188,56 @@ iOSのホーム画面でアプリのアイコンを別のアプリの上に重�
 ```js
 function checkHoverFolder(clientX, clientY) {
   if (!dragEl || hoverOpenInProgress) return;
+
+  // ① まず「パンくず付近まで持ち上げたら親フォルダへ戻る」ゾーンを判定する
+  //   （フォルダの中にいる時だけ。ルート表示中は戻り先が無いので対象外）
   const exitZone = getExitZoneRect();
   if (exitZone && clientY <= exitZone.bottom) {
-    // パンくず付近まで持ち上げていたら、親フォルダへ「戻る」対象として扱う
-    ...
+    const parentFolder = folders.find(f => f.id === currentFolderId);
+    const parentId = parentFolder ? (parentFolder.parentId ?? null) : null;
+    const dragKey = dragEl.dataset.key;
+    let ok = true;
+    if (dragKey.startsWith('folder:')) {
+      ok = canMoveFolderTo(dragKey.slice('folder:'.length), parentId);
+    } else {
+      const deckId = resolveDeckIdFromDragKey(dragKey);
+      ok = deckId ? canMoveDeckTo(deckId, parentId) : true;
+    }
+    if (ok) {
+      applyHoverTarget(exitZone.el, parentId);
+      return;
+    }
   }
+
+  // dragEl自身が指の真下にあるとelementFromPointがそれを拾ってしまうため、
+  // 判定中だけ一時的にpointer-eventsを外して「透明」にする
   const prevPE = dragEl.style.pointerEvents;
   dragEl.style.pointerEvents = 'none';
   const under = document.elementFromPoint(clientX, clientY);
   dragEl.style.pointerEvents = prevPE;
+
   const folderCard = under ? under.closest('.folder-card') : null;
-  ...
+  let targetFolderId = null;
+
+  if (folderCard && folderCard.parentElement === grid && folderCard !== dragEl) {
+    const fid = folderCard.dataset.key.slice('folder:'.length);
+    const dragKey = dragEl.dataset.key;
+    // 掴んでいるのがフォルダで、その移動先が自分自身／自分の子孫フォルダの場合は
+    // 開けない（無限ループ・不正な階層構造の防止。canMoveFolderToで判定）
+    if (dragKey.startsWith('folder:')) {
+      const draggedFolderId = dragKey.slice('folder:'.length);
+      if (canMoveFolderTo(draggedFolderId, fid)) targetFolderId = fid;
+    } else {
+      const deckId = resolveDeckIdFromDragKey(dragKey);
+      if (!deckId || canMoveDeckTo(deckId, fid)) targetFolderId = fid;
+    }
+  }
+
+  if (targetFolderId) {
+    applyHoverTarget(folderCard, targetFolderId);
+  } else {
+    clearHoverFolder();
+  }
 }
 ```
 - `document.elementFromPoint(x, y)`で「指の真下に今何が表示されているか」を調べます。ただし、そのままだと掴んでいるカード自身（指のすぐ下にあるので）が拾われてしまうため、判定する一瞬だけ`pointerEvents = 'none'`（このカードはクリック・タップの対象外、と一時的に無効化する）にして、その裏にある本当のフォルダを検出できるようにしています。
@@ -217,11 +267,40 @@ function applyHoverTarget(el, targetFolderId) {
 3. **ドラッグを継続する**：フォルダを切り替えると`#deck-grid`の中身が丸ごと新しく作り直されるため、それまで掴んでいた`dragEl`（DOM要素）はもう画面から消えています。そこで、同じ`data-key`を持つ**新しく描画された要素**を探し直し（`getItems().find(...)`）、それに対してもう一度`beginDrag`を呼び直すことでドラッグを継続します。
 
 ```js
+// ★ 追加：フォルダを切り替える直前の「見た目の位置」と、その時点の最新の指の位置を
+//   ここで（＝各種await完了後の最新の状態で）確定させる。デッキ読み込み待ちなどの
+//   非同期処理中に指が動いていた場合でも、ここで最新値を使うことでズレを防ぐ。
 const oldVisualTop = dragEl.getBoundingClientRect().top;
-...
-const newNaturalTop = newEl.getBoundingClientRect().top;
-const initialDy = oldVisualTop - newNaturalTop;
-beginDrag(newEl, resumeClientY, initialDy);
+const resumeClientX = lastClientX;
+const resumeClientY = lastClientY;
+
+// フォルダを開く
+currentFolderId = targetFolderId;
+
+// ★ ドラッグ中は renderDeckListUI() が丸ごとスキップされるため、ここだけ
+//   一時的にガードを外して再描画し、開いたフォルダの中身を表示する。
+const wasDragActive = cmListDragActive;
+cmListDragActive = false;
+renderDeckListUI();
+cmListDragActive = wasDragActive;
+
+const body = document.querySelector('#screen-list .cm-scroll-body');
+if (body) body.scrollTop = 0;
+
+// ★ 再描画で古いdragEl要素はDOMから外れてしまったので、新しく描画された
+//   同じ項目（data-keyで特定）を探し直し、そのままドラッグを継続する。
+const newEl = getItems().find(it => it.dataset.key === key) || null;
+if (newEl) {
+  const newNaturalTop = newEl.getBoundingClientRect().top;
+  const initialDy = oldVisualTop - newNaturalTop;
+  beginDrag(newEl, resumeClientY, initialDy);
+  lastClientX = resumeClientX;
+  try { newEl.setPointerCapture(pressPointerId); } catch (_) {}
+} else {
+  // 万一見つからなければドラッグ状態を安全に終了させる
+  dragEl = null;
+  cmListDragActive = false;
+}
 ```
 - 新しく描画された要素は「開いたフォルダの一覧の中の自然な位置」に置かれるだけで、指の位置とは無関係な場所に表示されます。そこで、フォルダ切り替え前の見た目の位置（`oldVisualTop`）と、切り替え後の自然な位置（`newNaturalTop`）の差を`initialDy`として`beginDrag`に渡すことで、**カードが指の位置からずれずにそのまま連続して見える**ように調整しています（3.1節で説明した`beginDrag`の`initialDy`引数がここで使われます）。
 
