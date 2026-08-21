@@ -99,14 +99,145 @@ async function fetchAndMergeOrder() {
 - `AbortController`を使って「5秒待っても返事が無ければ通信を打ち切る」タイムアウトを実装しています。`controller.signal`を`fetch`に渡しておくと、`controller.abort()`が呼ばれた瞬間にその通信は中断されます。
 - `cache: 'no-store'`は、ブラウザが古い結果を勝手に使い回してしまわないようにする指定です（他の部員が作ったフォルダがすぐ反映されない、という不具合を防ぐため）。
 
-`pushSharedOrderToServer(folderId, keys)`（266〜287行）は逆方向、この端末で決めた並び順のうち共有部分だけをサーバーに送る関数です。8秒のタイムアウト付きで`/save_order`にPOSTし、成功したらローカルのキャッシュも更新します。
+```js
+async function pushSharedOrderToServer(folderId, keys) {
+  const sharedKeys = keys.filter(isSharedOrderKey);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${API_BASE}save_order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ scope: orderScopeKey(folderId), keys: sharedKeys }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (data.ok) {
+      sharedOrderCache[orderScopeKey(folderId)] = sharedKeys;
+      saveSharedOrderCache(sharedOrderCache);
+    }
+    return !!data.ok;
+  } catch (e) {
+    return false;
+  }
+}
+```
+- `pushSharedOrderToServer(folderId, keys)`（266〜287行）は`fetchAndMergeOrder()`の逆方向、この端末で決めた並び順のうち共有部分（`isSharedOrderKey`で判定）だけをサーバーに送る関数です。8秒のタイムアウト付きで`/save_order`にPOSTし、成功したらローカルのキャッシュも更新します。
 
-`fetchAndMergeFolders()`（290〜303行）はフォルダ一覧をサーバーから取得してキャッシュに反映する関数。同じくタイムアウト・`no-store`付きです。
+```js
+// ★ サーバーからフォルダ一覧を取得してキャッシュに反映する
+async function fetchAndMergeFolders() {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 5000);
+  // ★ cache: 'no-store' を追加：Chromeなどが list_folders のレスポンスを
+  //   ディスクキャッシュから返してしまい、他端末で作成したフォルダが
+  //   即座に反映されない不具合を防ぐため、常にサーバーへ問い合わせる。
+  const res = await fetch(`${API_BASE}list_folders`, { signal: controller.signal, cache: 'no-store' });
+  clearTimeout(timer);
+  const data = await res.json();
+  if (!data.ok) return false;
+  folders = (data.folders || []).map(f => ({ id: f.id, name: f.name, parentId: f.parent_id ?? null }));
+  saveFoldersCache(folders);
+  return true;
+}
+```
+- `fetchAndMergeFolders()`（290〜303行）はフォルダ一覧をサーバーから取得してキャッシュに反映する関数。同じくタイムアウト・`no-store`付きです。
 
 ### 2.5 フォルダの階層構造を扱う関数群（305〜392行）
 
-ここは「木構造（親子関係を持つデータ）を扱うときによく出てくるパターン」の集まりです。1つずつ短く説明します。
+ここは「木構造（親子関係を持つデータ）を扱うときによく出てくるパターン」の集まりです。
 
+```js
+function folderLevel(id) {
+  let lvl = 0, cur = folders.find(f => f.id === id);
+  while (cur) { lvl++; cur = folders.find(f => f.id === cur.parentId); }
+  return lvl;
+}
+function folderChildren(parentId) {
+  return folders.filter(f => f.parentId === parentId)
+    .slice().sort((a,b) => a.name.localeCompare(b.name, 'ja'));
+}
+function folderDescendants(id) {
+  const direct = folders.filter(f => f.parentId === id);
+  let all = [...direct];
+  direct.forEach(f => { all = all.concat(folderDescendants(f.id)); });
+  return all;
+}
+function maxLevelInSubtree(id) {
+  const desc = folderDescendants(id);
+  return Math.max(folderLevel(id), ...desc.map(f => folderLevel(f.id)));
+}
+function canMoveFolderTo(folderId, newParentId) {
+  if (folderId === newParentId) return false;
+  // ★「クイズ過去問」フォルダ自身は移動できない（システムフォルダ）
+  if (folderId === QUIZ_ARCHIVE_FOLDER_ID) return false;
+  const descIds = folderDescendants(folderId).map(f => f.id);
+  if (newParentId && descIds.includes(newParentId)) return false;
+  const oldLevel = folderLevel(folderId);
+  const newLevel = folderLevel(newParentId) + 1;
+  const shift = newLevel - oldLevel;
+  if ((maxLevelInSubtree(folderId) + shift) > MAX_FOLDER_DEPTH) return false;
+  // ★「クイズ過去問」フォルダの中身は、その外へ移動できない
+  if (isFolderInFolderScope(folderId, QUIZ_ARCHIVE_FOLDER_ID) && !isFolderInFolderScope(newParentId, QUIZ_ARCHIVE_FOLDER_ID)) {
+    return false;
+  }
+  return true;
+}
+function countDecksRecursive(folderId) {
+  const direct = decks.filter(d => (d.folderId || null) === folderId).length;
+  const subCount = folderChildren(folderId).reduce((sum, f) => sum + countDecksRecursive(f.id), 0);
+  return direct + subCount;
+}
+// フォルダ配下（サブフォルダ含む）の合計カード数
+function countCardsRecursive(folderId) {
+  const direct = decks
+    .filter(d => (d.folderId || null) === folderId)
+    .reduce((sum, d) => sum + (d.filename ? (d.count ?? d.cards.length) : d.cards.length), 0);
+  const subCount = folderChildren(folderId).reduce((sum, f) => sum + countCardsRecursive(f.id), 0);
+  return direct + subCount;
+}
+// フォルダ配下（サブフォルダ含む）の「わからない」カード数の合計
+// ※ カード本体が未読み込み（cardsLoaded === false）のデッキは
+//    unsureセットと突き合わせる術がないので、そのデッキ分は数えない
+//    （一覧を開いたときに一部のデッキがまだ未読み込みでも壊れないようにするため）
+function countUnsureRecursive(folderId) {
+  return collectDecksInFolder(folderId).reduce((sum, d) => {
+    if (d.cardsLoaded === false) return sum;
+    const unsure = getUnsureSet(d.id);
+    return sum + d.cards.filter(c => unsure.has(cardKey(c))).length;
+  }, 0);
+}
+
+// フォルダ配下（サブフォルダ含む）の全デッキを集める
+function collectDecksInFolder(folderId) {
+  const direct = decks.filter(d => (d.folderId || null) === folderId);
+  const subDecks = folderChildren(folderId).reduce((arr, f) => arr.concat(collectDecksInFolder(f.id)), []);
+  return [...direct, ...subDecks];
+}
+
+// ★ 追加：あるデッキ／フォルダが、指定フォルダの範囲内（サブフォルダ含む）に含まれるかどうか
+//   ・folderId が null の場合は「ホーム」＝アプリ全体なので、常に範囲内とみなす
+function isDeckInFolderScope(deckId, folderId) {
+  if (folderId === null) return true;
+  return collectDecksInFolder(folderId).some(d => d.id === deckId);
+}
+function isFolderInFolderScope(fid, folderId) {
+  if (folderId === null) return true;
+  if (fid === folderId) return true;
+  return folderDescendants(folderId).some(f => f.id === fid);
+}
+
+// ★ デッキ版の canMoveFolderTo。フォルダのような階層数制限はデッキには
+//   存在しないため、今のところ特別な制限は無い（常にtrue）。
+//   ★ 以前は「クイズ過去問フォルダの中にあるデッキは、その外へ移動できない」
+//   という制限があったが、2026/08/21にユーザーの要望で撤廃した（クイズ過去問
+//   デッキも他のフォルダへ移動できる。代わりに「問題の編集はできない」という
+//   別の制限を設けている。openDeckMenu/save_cards参照）。
+function canMoveDeckTo(deckId, targetFolderId) {
+  return true;
+}
+```
 - `folderLevel(id)`：あるフォルダが何階層目にあるか（親をたどって数える）。
 - `folderChildren(parentId)`：あるフォルダの直下の子フォルダ一覧（名前順にソート）。
 - `folderDescendants(id)`：あるフォルダの配下すべて（子・孫…を再帰的に集める）。
@@ -124,6 +255,104 @@ async function fetchAndMergeOrder() {
 
 Quiz.htmlの「クイズを作る」→「デッキを選ぶ」から`?pick=quiz`というURLパラメータ付きでCardMakerを開くと、普段のデッキ一覧の見た目のまま、デッキやフォルダをタップして**複数選択**できるモードに切り替わります。
 
+```js
+// クイズの4択自動生成に使えるデッキかどうか（公開済み・作成中でない・カードが1枚以上ある）
+function isDeckQuizPickable(d) {
+  if (!d || !d.filename) return false; // 非公開（ローカル限定）デッキはサーバー側で読めないため対象外
+  const isInProgress = d.notYetPublished !== false;
+  if (isInProgress) return false;
+  const questionCount = d.count ?? d.cards.length;
+  return questionCount > 0;
+}
+
+// 指定フォルダの祖先（自分自身は含まない）に、選択済みのフォルダがあるかどうか。
+// あれば「上位フォルダの選択に含まれて自動的に選ばれている」状態とみなす。
+function pickFolderAncestorSelected(folderId) {
+  let cur = folderId ? folders.find(f => f.id === folderId) : null;
+  while (cur) {
+    if (pickedFolderIds.has(cur.id)) return true;
+    cur = cur.parentId ? folders.find(f => f.id === cur.parentId) : null;
+  }
+  return false;
+}
+function togglePickDeck(deckId, ev) {
+  if (ev) ev.stopPropagation();
+  const d = decks.find(x => x.id === deckId);
+  if (!d || !isDeckQuizPickable(d)) return;
+  if (pickFolderAncestorSelected(d.folderId || null)) return; // 上位フォルダ選択で自動的に含まれている
+  if (pickedDeckIds.has(deckId)) pickedDeckIds.delete(deckId); else pickedDeckIds.add(deckId);
+  renderDeckListUI();
+}
+
+function togglePickFolder(folderId, ev) {
+  if (ev) ev.stopPropagation();
+  const f = folders.find(x => x.id === folderId);
+  if (!f) return;
+  if (pickFolderAncestorSelected(f.parentId || null)) return; // 上位フォルダ選択で自動的に含まれている
+  const hasEligibleDeck = collectDecksInFolder(folderId).some(isDeckQuizPickable);
+  if (!hasEligibleDeck) return;
+  if (pickedFolderIds.has(folderId)) {
+    pickedFolderIds.delete(folderId);
+  } else {
+    pickedFolderIds.add(folderId);
+    // ★ フォルダを選んだら、その配下の個別選択（デッキ・子孫フォルダ）は
+    //   フォルダ選択に包含されて冗長になるので整理しておく
+    collectDecksInFolder(folderId).forEach(d => pickedDeckIds.delete(d.id));
+    folderDescendants(folderId).forEach(sf => pickedFolderIds.delete(sf.id));
+  }
+  renderDeckListUI();
+}
+
+// 現在の選択内容を、実際にクイズへ渡す「デッキ filename の一覧」に展開する
+// （フォルダ選択は配下の対象デッキへ、個別選択とあわせて重複なく1つのリストにする）。
+function computePickedDecks() {
+  const filenameSet = new Set();
+  const result = [];
+  const add = d => {
+    if (!isDeckQuizPickable(d) || filenameSet.has(d.filename)) return;
+    filenameSet.add(d.filename);
+    result.push({ filename: d.filename, name: d.name });
+  };
+  pickedFolderIds.forEach(fid => collectDecksInFolder(fid).forEach(add));
+  pickedDeckIds.forEach(id => { const d = decks.find(x => x.id === id); if (d) add(d); });
+  return result;
+}
+
+function updatePickBar() {
+  const countEl = document.getElementById('pick-mode-count');
+  const confirmBtn = document.getElementById('pick-mode-confirm-btn');
+  if (!countEl) return;
+  const picked = computePickedDecks();
+  countEl.textContent = picked.length ? `${picked.length}件のデッキを選択中` : 'デッキを選んでください';
+  if (confirmBtn) confirmBtn.disabled = picked.length === 0;
+}
+
+function pickModeCancel() {
+  location.href = pickReturnUrl || 'Quiz.html';
+}
+
+async function pickModeConfirm() {
+  const picked = computePickedDecks();
+  if (!picked.length) return;
+  sessionStorage.setItem('quizDeckPicker', JSON.stringify(picked));
+  location.href = pickReturnUrl || 'Quiz.html?mode=host&fromPicker=1';
+}
+
+// URLの ?pick=quiz を見て選択モードを開始する（renderDeckList() で最新の
+// decks/folders を取得し終えた後に呼ぶこと）
+function initPickModeFromUrl() {
+  const params = new URLSearchParams(location.search);
+  if (params.get('pick') !== 'quiz') return;
+  pickMode = 'quiz';
+  pickReturnUrl = 'Quiz.html?mode=host&fromPicker=1';
+  history.replaceState(null, '', location.pathname + location.hash);
+  document.body.classList.add('pick-mode-active');
+  document.getElementById('pick-mode-banner').style.display = 'block';
+  document.getElementById('pick-mode-bar').style.display = 'flex';
+  currentFolderId = null; // ホームから選び始める
+  renderDeckListUI();
+}
+```
 - `isDeckQuizPickable(d)`：あるデッキがクイズの4択自動生成に使えるかどうか。「非公開（下書き）ではない」「公開作業が途中でない」「カードが1枚以上ある」の3条件。
 - `pickFolderAncestorSelected(folderId)`：あるフォルダの親をたどっていって、すでに選択済みのフォルダがあるかどうか。あれば「上のフォルダごと選ばれているので、これは自動的に含まれている」という扱いになります。
 - `togglePickDeck(deckId, ev)`／`togglePickFolder(folderId, ev)`：デッキ／フォルダのタップで選択状態を切り替える。フォルダを選んだときは、その配下の個別選択（デッキ・子フォルダ）は「フォルダ選択に含まれて冗長」になるので、自動的に整理（選択解除）されます。
@@ -222,7 +451,24 @@ function renderChoiceEditorRows(prefix, choices, correctIdx) {
 - 選択肢の入力行を作り直す関数です。ここで注目したいのは、入力欄の`value`（今入っている文字列）を**HTML文字列の中に直接埋め込んでいない**点です。まず空の入力欄だけをHTMLとして作ってから、あとで`.value = val`とJSで代入しています。コメントに「value属性への直接埋め込みはエスケープ事故（クォート等）の元になるため」とある通り、`"`を含む文字列を`value="${val}"`のように直接埋め込んでしまうと、その`"`のところで属性が途切れてHTMLが壊れてしまう危険があるため、これを避ける安全な書き方をしています。
 - 選択肢が2個までしか無ければ削除ボタンは出さない（`CHOICE_MIN`未満にはできない）、5個に達したら追加ボタンを出さない（`CHOICE_MAX`）という、上限・下限のガードも組み込まれています。
 
-`addChoiceRow(prefix)`／`removeChoiceRow(prefix, idx)`（580〜594行）は、それぞれ選択肢を1個追加・削除して`renderChoiceEditorRows`を呼び直す関数です。削除のときは、削除した選択肢より後ろの正解インデックスを1つずつ繰り上げる処理（`correct.filter(...).map(...)`）も行っています。
+```js
+function addChoiceRow(prefix) {
+  const { choices, correct } = readChoiceEditorState(prefix);
+  if (choices.length >= CHOICE_MAX) return;
+  choices.push('');
+  renderChoiceEditorRows(prefix, choices, correct);
+  document.getElementById(`${prefix}-choice-${choices.length - 1}`).focus();
+}
+
+function removeChoiceRow(prefix, idx) {
+  const { choices, correct } = readChoiceEditorState(prefix);
+  if (choices.length <= CHOICE_MIN) return;
+  choices.splice(idx, 1);
+  const newCorrect = correct.filter(i => i !== idx).map(i => i > idx ? i - 1 : i);
+  renderChoiceEditorRows(prefix, choices, newCorrect);
+}
+```
+- `addChoiceRow(prefix)`／`removeChoiceRow(prefix, idx)`（580〜594行）は、それぞれ選択肢を1個追加・削除して`renderChoiceEditorRows`を呼び直す関数です。削除のときは、削除した選択肢より後ろの正解インデックスを1つずつ繰り上げる処理（`correct.filter(i => i !== idx).map(i => i > idx ? i - 1 : i)`）も行っています。
 
 ---
 
@@ -245,10 +491,40 @@ function findDuplicateCardIndex(deck, q, a, excludeIdx = -1) {
 
 ```js
 async function warnIfDuplicateOrSameCard(deck, q, a, e, excludeIdx = -1) {
-  // ①同じ問題・答えの組み合わせが既にある
-  // ②解答が問題文と完全一致
-  // ③解答が解説と完全一致
-  // → それぞれ該当したら showCmConfirm で警告し、「やめる」が選ばれたら true（保存を中断すべき）を返す
+  const nq = normalizeForDupCheck(q), na = normalizeForDupCheck(a), ne = normalizeForDupCheck(e);
+
+  // ① 同じ問題・答えの組み合わせが既にある
+  const dupIdx = findDuplicateCardIndex(deck, q, a, excludeIdx);
+  if (dupIdx !== -1) {
+    const proceed = await showCmConfirm({
+      title: '同じ問題と答えのカードが既にあります',
+      desc: `このデッキの${dupIdx + 1}枚目と、問題文・解答が完全に一致しています。\n重複登録の可能性があります。このまま保存しますか？`,
+      okLabel: 'このまま保存する', cancelLabel: '内容を確認する', okStyle: 'danger',
+    });
+    if (!proceed) return true;
+  }
+
+  // ② 解答が問題文と完全一致
+  if (na && nq && na === nq) {
+    const proceed = await showCmConfirm({
+      title: '解答が問題文と完全に同じです',
+      desc: '解答欄の内容が問題文と一字一句同じになっています。\n入力ミスの可能性があります。このまま保存しますか？',
+      okLabel: 'このまま保存する', cancelLabel: '内容を確認する', okStyle: 'danger',
+    });
+    if (!proceed) return true;
+  }
+
+  // ③ 解答が解説と完全一致
+  if (na && ne && na === ne) {
+    const proceed = await showCmConfirm({
+      title: '解答が解説と完全に同じです',
+      desc: '解答欄の内容が解説欄と一字一句同じになっています。\n入力ミスの可能性があります。このまま保存しますか？',
+      okLabel: 'このまま保存する', cancelLabel: '内容を確認する', okStyle: 'danger',
+    });
+    if (!proceed) return true;
+  }
+
+  return false;
 }
 ```
 - 3つのケースそれぞれについて、「入力ミスの可能性があります。このまま保存しますか？」という確認ダイアログを出します。ユーザーが「内容を確認する」（＝保存しない）を選んだ場合は`true`を返し、呼び出し元（`saveCard`など）はそこで保存処理を止めます。「このまま保存する」を選べば、意図的な内容として保存が続行されます。
@@ -264,6 +540,104 @@ async function warnIfDuplicateOrSameCard(deck, q, a, e, excludeIdx = -1) {
 2. `document.body`に追加してから、`requestAnimationFrame`（次の画面更新のタイミングで実行、を意味するブラウザの機能）で`open`クラスを付けてアニメーション開始。
 3. ボタンが押された・背景がクリックされたら、`open`クラスを外してフェードアウトさせてから（180ミリ秒後に）要素ごと削除し、`Promise`の`resolve`で結果を呼び出し元に返す。
 
+```js
+// 選択肢が2つの確認ダイアログ（キャンセル + 実行）。confirm()の代替。
+// okStyle: 'blue' | 'danger' | 'outline'（既存のbtnクラスに対応）
+function showCmConfirm({ title, desc = '', okLabel = 'OK', cancelLabel = 'キャンセル', okStyle = 'blue' }) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-sheet">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${esc(title)}</div>
+        ${desc ? `<div style="font-size:13px;color:var(--text-secondary);margin:-.5rem 0 1rem;line-height:1.6;white-space:pre-line">${esc(desc)}</div>` : ''}
+        <div class="modal-btns">
+          <button type="button" class="btn btn-ghost" data-val="0">${esc(cancelLabel)}</button>
+          <button type="button" class="btn btn-${okStyle}" data-val="1">${esc(okLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+
+    function finish(value) {
+      overlay.classList.remove('open');
+      setTimeout(() => overlay.remove(), 180);
+      resolve(value);
+    }
+    overlay.querySelectorAll('[data-val]').forEach(btn => {
+      btn.addEventListener('click', () => finish(btn.dataset.val === '1'));
+    });
+    overlay.addEventListener('click', e => { if (e.target === overlay) finish(false); });
+  });
+}
+
+// ボタン1つだけの通知ダイアログ。alert()の代替。
+function showCmAlert({ title, desc = '', okLabel = '閉じる' }) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-sheet">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${esc(title)}</div>
+        ${desc ? `<div style="font-size:13px;color:var(--text-secondary);margin:-.5rem 0 1rem;line-height:1.6;white-space:pre-line">${esc(desc)}</div>` : ''}
+        <div class="modal-btns">
+          <button type="button" class="btn btn-blue" data-val="1" style="flex:1">${esc(okLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+
+    function finish() {
+      overlay.classList.remove('open');
+      setTimeout(() => overlay.remove(), 180);
+      resolve(true);
+    }
+    overlay.querySelector('[data-val]').addEventListener('click', finish);
+    overlay.addEventListener('click', e => { if (e.target === overlay) finish(); });
+  });
+}
+
+// 3つ以上の選択肢から選ぶダイアログ（modal-play-mode と同じ見た目）。
+// choices: [{ icon, label, sub, value }]。キャンセル時は null を返す。
+function showCmChoiceDialog({ title, desc = '', choices, cancelLabel = 'キャンセル' }) {
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-sheet">
+        <div class="modal-handle"></div>
+        <div class="modal-title">${esc(title)}</div>
+        ${desc ? `<div style="font-size:13px;color:var(--text-secondary);margin:-.5rem 0 1rem;line-height:1.6;white-space:pre-line">${esc(desc)}</div>` : ''}
+        ${choices.map((c, i) => `
+          <div class="play-mode-item" data-idx="${i}">
+            <span class="play-mode-icon">${c.icon || ''}</span>
+            <div>
+              <div>${esc(c.label)}</div>
+              ${c.sub ? `<div class="play-mode-sub">${esc(c.sub)}</div>` : ''}
+            </div>
+          </div>`).join('')}
+        <div class="modal-btns" style="margin-top:.5rem">
+          <button type="button" class="btn btn-ghost" data-cancel style="flex:1">${esc(cancelLabel)}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    requestAnimationFrame(() => overlay.classList.add('open'));
+
+    function finish(value) {
+      overlay.classList.remove('open');
+      setTimeout(() => overlay.remove(), 180);
+      resolve(value);
+    }
+    overlay.querySelectorAll('[data-idx]').forEach(el => {
+      el.addEventListener('click', () => finish(choices[+el.dataset.idx].value));
+    });
+    overlay.querySelector('[data-cancel]').addEventListener('click', () => finish(null));
+    overlay.addEventListener('click', e => { if (e.target === overlay) finish(null); });
+  });
+}
+```
 - `showCmConfirm({title, desc, okLabel, cancelLabel, okStyle})`：キャンセル/実行の2択（OS標準の`confirm()`の代替）。押された結果を`true`/`false`で返します。`await showCmConfirm({...})`のように呼び出せば、「OKが押されるまで待って、結果を受け取る」という書き方ができます。
 - `showCmAlert({title, desc, okLabel})`：ボタン1つだけの通知（OS標準の`alert()`の代替）。
 - `showCmChoiceDialog({title, desc, choices, cancelLabel})`：3つ以上の選択肢から1つを選ぶダイアログ。`choices`は`{icon, label, sub, value}`の配列で、選ばれた項目の`value`を返す（キャンセル時は`null`）。
