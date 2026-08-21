@@ -71,8 +71,18 @@ function withAuth(extra = {}) {
 function showConfirm({ title, desc = '', okLabel = 'OK', cancelLabel = 'キャンセル' }) {
   return new Promise(resolve => {
     const overlay = document.getElementById('qz-confirm-overlay');
-    ...
-    function finish(v) { overlay.classList.remove('active'); okBtn.onclick = null; cancelBtn.onclick = null; resolve(v); }
+    document.getElementById('qz-confirm-title').textContent = title;
+    document.getElementById('qz-confirm-desc').textContent = desc;
+    const okBtn = document.getElementById('qz-confirm-ok');
+    const cancelBtn = document.getElementById('qz-confirm-cancel');
+    okBtn.textContent = okLabel;
+    cancelBtn.textContent = cancelLabel;
+    overlay.classList.add('active');
+    function finish(v) {
+      overlay.classList.remove('active');
+      okBtn.onclick = null; cancelBtn.onclick = null;
+      resolve(v);
+    }
     okBtn.onclick = () => finish(true);
     cancelBtn.onclick = () => finish(false);
   });
@@ -159,19 +169,39 @@ function goJoinScreen() {
 
 ```js
 async function loadRoomList() {
+  const listEl = document.getElementById('join-room-list');
   const data = await apiGet('quiz_list_rooms', withAuth());
-  ...
+  if (!data.ok) {
+    listEl.innerHTML = `<p class="qz-label">読み込みに失敗しました（${quizErrorText(data.error)}）</p>`;
+    return;
+  }
   const rooms = data.rooms || [];
-  ...
+  if (!rooms.length) {
+    listEl.innerHTML = `<p class="qz-label">現在参加できるクイズはありません。ホストが作成すると、ここに表示されます。</p>`;
+    return;
+  }
+  // ★ 開始後（question/reveal）のルームも「プレイ中」として出しっぱなしにする
+  //   （終了(ended)するまで一覧に残る）。ホストが途中参加を許可していれば
+  //   そこから参加できる（joinable=true）。許可していない場合は、状況が
+  //   分かるように表示だけはするが、タップしても参加できないようにする。
   listEl.innerHTML = rooms.map(r => {
     const inProgress = r.state !== 'lobby';
     const joinable = r.state === 'lobby' || r.allow_late_join;
-    const statusText = !inProgress ? '参加受付中' : (joinable ? `...プレイ中（第${r.current_q + 1}問）` : '...プレイ中・途中参加不可');
+    const statusText = !inProgress
+      ? '参加受付中'
+      : (joinable ? `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true" color="#dc2626"><circle cx="12" cy="12" r="7.2" fill="currentColor" stroke="none"/></svg> プレイ中（第${r.current_q + 1}問）` : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#475569" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><rect x="5" y="10.3" width="14" height="10.2" rx="2"/><path d="M8 10.3V7a4 4 0 0 1 8 0v3.3"/></svg> プレイ中・途中参加不可');
     const tag = joinable ? 'button' : 'div';
     const typeAttr = joinable ? ' type="button"' : '';
     const clickAttr = joinable ? ` onclick="joinRoomByCode('${r.code}')"` : '';
-    ...
-    return `<${tag} class="qz-room-row${disabledClass}"${typeAttr}${clickAttr}>...</${tag}>`;
+    const disabledClass = joinable ? '' : ' qz-room-row-disabled';
+    return `
+    <${tag} class="qz-room-row${disabledClass}"${typeAttr}${clickAttr}>
+      <div class="qz-room-row-main">
+        <div class="qz-room-row-title">${escapeHtml(r.title)}</div>
+        <div class="qz-room-row-sub">${escapeHtml(r.host_nickname)} さん・${r.question_count}問・${statusText}</div>
+      </div>
+      <div class="qz-room-row-count"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#7c3aed" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><circle cx="9" cy="8.3" r="3"/><path d="M3.4 19c0-3.3 2.5-6 5.6-6s5.6 2.7 5.6 6"/><circle cx="16.6" cy="9.3" r="2.3"/><path d="M15.3 13.1c2.5.3 4.5 2.6 4.7 5.6"/></svg> ${r.player_count}</div>
+    </${tag}>`;
   }).join('');
 }
 ```
