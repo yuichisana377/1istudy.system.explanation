@@ -19,23 +19,61 @@ const IMG_JPEG_QUALITY  = 0.72;
 ```
 - コメントに「GitHub Contents API（1ファイルあたり実用上1MB程度が上限）に収まりやすくするため」とあります。カードに添付する画像は、サーバー側でGitHubリポジトリに保存される仕組みになっているらしく、そのAPIの実用上の制限に収まるよう、長辺を1280pxに縮小し、画質72%のJPEGとして保存する、という具体的な数値がここで決められています。
 
-### 1.1 EXIFの向き情報を読み取る（4174〜4209行）
+### 1.1 EXIFの向き情報を読み取る（4190〜4225行）
 ```js
 function getExifOrientation(arrayBuffer) {
   const view = new DataView(arrayBuffer);
   if (view.byteLength < 4 || view.getUint16(0, false) !== 0xFFD8) return 1; // JPEGでない
-  ...
+  const length = view.byteLength;
+  let offset = 2;
+  while (offset + 4 <= length) {
+    const marker = view.getUint16(offset, false);
+    if (marker === 0xFFE1) {
+      const segLength = view.getUint16(offset + 2, false);
+      return readExifOrientation(view, offset + 4, segLength);
+    } else if ((marker & 0xFF00) !== 0xFF00) {
+      break;
+    } else {
+      offset += 2 + view.getUint16(offset + 2, false);
+    }
+  }
+  return 1;
+}
+function readExifOrientation(view, start) {
+  if (start + 10 > view.byteLength) return 1;
+  if (view.getUint32(start, false) !== 0x45786966) return 1; // "Exif"
+  const tiffOffset = start + 6;
+  const little = view.getUint16(tiffOffset, false) === 0x4949;
+  const firstIFDOffset = view.getUint32(tiffOffset + 4, little);
+  const dirStart = tiffOffset + firstIFDOffset;
+  if (dirStart + 2 > view.byteLength) return 1;
+  const entries = view.getUint16(dirStart, little);
+  for (let i = 0; i < entries; i++) {
+    const entryOffset = dirStart + 2 + i * 12;
+    if (entryOffset + 10 > view.byteLength) break;
+    if (view.getUint16(entryOffset, little) === 0x0112) {
+      return view.getUint16(entryOffset + 8, little);
+    }
+  }
+  return 1;
 }
 ```
 - JPEGファイルは、先頭の2バイトが必ず`0xFFD8`という決まった値になっている、という仕様があり、それをチェックすることで「本当にJPEGファイルか」を確認しています。
 - そこから先は、JPEGファイルの内部構造（「マーカー」と呼ばれる区切りの並び）を1つずつ読み進めながら、EXIF情報が入っている`0xFFE1`というマーカーを探し出します。見つかったら`readExifOrientation`で、その中に埋め込まれている「向き」の値（1〜8の数字で、無回転・上下反転・90度回転などを表す）を取り出します。この処理はJPEGファイル形式の仕様を直接読み解いている、かなり低レベルな（生データに近い）コードです。
 
-### 1.2 向きの補正をcanvasの変形として適用する（4211〜4222行）
+### 1.2 向きの補正をcanvasの変形として適用する（4227〜4238行）
 ```js
+// 1〜8のEXIF orientation値をcanvasの変形に変換する
 function applyOrientationTransform(ctx, orientation, width, height) {
   switch (orientation) {
     case 2: ctx.transform(-1, 0, 0, 1, width, 0); break;
-    ...
+    case 3: ctx.transform(-1, 0, 0, -1, width, height); break;
+    case 4: ctx.transform(1, 0, 0, -1, 0, height); break;
+    case 5: ctx.transform(0, 1, 1, 0, 0, 0); break;
+    case 6: ctx.transform(0, 1, -1, 0, height, 0); break;
+    case 7: ctx.transform(0, -1, -1, 0, height, width); break;
+    case 8: ctx.transform(0, -1, 1, 0, 0, width); break;
+    default: break; // 1（回転なし）
   }
 }
 ```
@@ -101,19 +139,28 @@ imgInput.addEventListener('change', async () => {
 - ファイルが選ばれると、1節の圧縮処理を行い、結果をどちらのバッファ（新規作成用の`imgBuf`か、編集モーダル用の`editImgBuf`）に積むかを、控えておいた`context`で振り分けます。
 
 ```js
+// ★ セキュリティ：renderImgList()と同じ理由（save_cardsはimgs_q/imgs_a/imgs_eの
+//   中身を検証していないため、共有デッキ経由で他人が仕込んだ文字列が入りうる）で、
+//   ここも`<img src="${b}">`のようなテンプレート文字列ではなく、削除ボタン込みで
+//   DOM APIで組み立てる共通ヘルパーに統一する（imgBuf側はJS内で作った data: URL
+//   しか入らないので実害は薄いが、editImgBuf側は既存カード＝他人の入力を
+//   そのまま引き継ぐため、同じ描画関数を使い回すここでは常に安全な方だけ用意する）。
 function renderImgThumbStrip(container, imgs, onRemove) {
   container.innerHTML = '';
   imgs.forEach((b, i) => {
     const wrap = document.createElement('div');
-    ...
+    wrap.className = 'img-thumb';
     const img = document.createElement('img');
     img.src = b;
     img.alt = '';
     img.addEventListener('click', () => openImgLightbox(img.src));
     const delBtn = document.createElement('button');
-    delBtn.innerHTML = Icons.html('close', {size:12});
+    delBtn.className = 'img-thumb-del';
+    delBtn.innerHTML = Icons.html('close', {size:12}); // ★ Icons.jsの固定SVG(ユーザー入力を含まないため安全)
     delBtn.addEventListener('click', () => onRemove(i));
-    ...
+    wrap.appendChild(img);
+    wrap.appendChild(delBtn);
+    container.appendChild(wrap);
   });
 }
 ```
@@ -224,12 +271,19 @@ function setIconText(el, iconHtml, text) {
 - 「アイコン＋ユーザー入力のテキスト」という組み合わせを安全に表示するための共通ヘルパーです。アイコン部分（このファイル内に固定で書かれた安全なHTML）は`insertAdjacentHTML`でそのまま挿入し、テキスト部分（デッキ名・フォルダ名などユーザー入力）は`document.createTextNode`（文字列をそのまま「ただの文字」として扱うノードを作る命令）で追加します。こうすることで、テキスト部分に`<script>`のような文字列が入っていても、それはHTMLタグとしては一切解釈されず、ただの文字として表示されるだけになります。
 
 ```js
+// ★ セキュリティ：問題・解答の画像は、直接APIを叩けば任意の文字列を
+//   imgs_q/imgs_aへ入れられてしまう（save_cardsはこの中身を検証していない）。
+//   `<img src="${s}">` のようにテンプレート文字列でHTMLを組み立てると、
+//   sに " を含めるだけで属性の外へ抜けてXSSになるため、必ずDOMのsrc
+//   プロパティへ代入する（この方法なら中身が何であってもHTMLとしては解釈されない）。
 function renderImgList(container, imgs) {
   container.innerHTML = '';
   (imgs || []).forEach(s => {
     const img = document.createElement('img');
     img.src = s;
-    ...
+    img.alt = '';
+    img.addEventListener('click', () => openImgLightbox(img.src));
+    container.appendChild(img);
   });
 }
 ```
@@ -306,10 +360,17 @@ function findBugChars(str) {
 - 文字列を1文字ずつチェックし、「制御文字（タブ・改行・復帰は許可）」「削除文字（DEL）」「孤立サロゲート（本来ペアで使うべき文字コードが片方だけ存在する、壊れたデータ）」「上記の範囲リストに該当するもの」のいずれかに当てはまれば、問題のある文字として記録します（同じ文字を何度も記録しないよう`!found.includes(ch)`でチェック）。
 
 ```js
+// 該当文字があれば自前アラートで警告して true（＝入力NG）を返す
 async function warnIfBugChars(str, fieldId) {
   const bad = findBugChars(str);
   if (bad.length === 0) return false;
-  await showCmAlert({ title: '使用できない文字が含まれています', desc: `...\n\n該当文字：${bad.join(' ')}\n\n...` });
+  await showCmAlert({
+    title: '使用できない文字が含まれています',
+    desc: '見た目に表示されない特殊な制御文字（ゼロ幅スペース・文字方向の制御文字など）や、\n'
+        + '壊れた文字コード・未定義の符号位置は、他の端末や外部サービスで\n'
+        + 'エラーや文字化けの原因になるため使用できません。\n\n'
+        + `該当文字：${bad.join(' ')}\n\nお手数ですが該当箇所を削除・打ち直してください。`,
+  });
   if (fieldId) shake(fieldId);
   return true;
 }
