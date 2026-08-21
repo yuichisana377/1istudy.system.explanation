@@ -251,7 +251,11 @@ function clearEditor() {
     imgBuf[k] = [];
     document.getElementById('imgs-'+k).innerHTML = '';
   });
-  ...
+  // ★ 追加：多肢選択デッキの選択肢入力欄も、カードを1枚保存するたびに空へ戻す
+  const deck = decks.find(d => d.id === currentDeckId);
+  if (deck && deck.choiceMode) {
+    renderChoiceEditorRows('ta-choice', ['', ''], []);
+  }
 }
 ```
 - 問題文・解答・解説の入力欄と、添付画像のバッファをまとめて空にします。

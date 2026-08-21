@@ -29,7 +29,7 @@ if (!q) { shake('ta-q'); return 'invalid'; }
 const emptyIdx = choices.findIndex(c => !c);
 if (emptyIdx !== -1) { shake(`ta-choice-choice-${emptyIdx}`); return 'invalid'; }
 if (correct.length === 0) {
-  await showCmAlert({ title: '正解を1つ以上選んでください', ... });
+  await showCmAlert({ title: '正解を1つ以上選んでください', desc: '選択肢の左のチェックボックスで、正解を選んでください。1つだけ選べば択一問題、2つ以上選べば複数回答問題になります。' });
   return 'invalid';
 }
 ```
@@ -95,8 +95,8 @@ const choice = await showCmChoiceDialog({
   title: 'このデッキは完成していますか？',
   desc: '未完成として公開すると、Discordへの通知は送られません。\nあとから編集して完成にできます。',
   choices: [
-    { icon: ..., label: '完成として公開する', sub: '通知が送信されます', value: 'complete' },
-    { icon: ..., label: '未完成として公開する', sub: '通知は送信されません', value: 'draft' },
+    { icon: Icons.html('checkCircle', {size:20}), label: '完成として公開する',   sub: '通知が送信されます',   value: 'complete' },
+    { icon: Icons.html('dot', {size:26, color:'#eab308'}), label: '未完成として公開する', sub: '通知は送信されません', value: 'draft' },
   ],
 });
 if (!choice) return;
@@ -114,7 +114,7 @@ if (deck.filename) {
   setBtnLoading(saveBtn, true, '保存中…');
   const ok = await queueSyncDeckToServer(deck);
   setBtnLoading(saveBtn, false);
-  if (!ok) showBanner('サーバーへの保存に失敗しました（ローカルには保存済み）', ...);
+  if (!ok) showBanner('サーバーへの保存に失敗しました（ローカルには保存済み）', '#fffbeb', '#92400e', Icons.html('warning', {size:15}));
 }
 showScreen('list');
 ```
@@ -130,39 +130,73 @@ showScreen('list');
 ```js
 async function publishDeck(deckId, isComplete = true) {
   saveDecks(decks); showScreen('list');
+
+  // showScreen('list') 実行後の最新の decks から対象デッキを取得する
   const deck = decks.find(d => d.id === deckId);
   if (!deck) return;
-  ...
-}
+
+  const session = getLoginSession();
 ```
 - 冒頭のコメントに重要な設計上の注意が書かれています。`showScreen('list')`を呼ぶと、その内部で`decks = loadDecks()`が実行され、**`decks`配列全体が新しいオブジェクト群に入れ替わります**。もし関数の引数として渡された`deck`オブジェクトをそのまま使い続けてしまうと、それは「もう配列に含まれていない孤立した参照」になってしまい、後で行う`filename`の更新が実際には保存されない、というバグにつながります。そのため、**`deckId`（文字列）だけを受け取り、必要になるたびに毎回`decks.find(...)`で最新の配列から探し直す**、という設計にしています。
 
 ```js
-const cards = deck.cards.map(cardToServerPayload);
-const isFirstPublish = deck.notYetPublished !== false;
-const body = {
-  name: deck.name, cards, guild_id: GUILD_ID, session_token: ...,
-  subject: deck.subject || null, folder_id: deck.folderId || null,
-  publisher_id: ..., publisher_nickname: ...,
-  silent: !isComplete, incomplete: !isComplete,
-  first_publish: isFirstPublish, choice_mode: deck.choiceMode || null,
-};
-if (deck.filename) body.filename = deck.filename;
+  const cards = deck.cards.map(cardToServerPayload);
+  const isFirstPublish = deck.notYetPublished !== false;
+  const body = {
+    name: deck.name,
+    cards,
+    guild_id: GUILD_ID,
+    session_token: session ? session.session_token : undefined,
+    subject: deck.subject || null,                       // ★ 科目ごとのチャンネル振り分け用
+    folder_id: deck.folderId || null,                     // ★ フォルダ所属（みんなで共有）
+    publisher_id: session ? session.student_id : null,     // ★ 公開者の学籍番号
+    publisher_nickname: session ? session.nickname : '匿名', // ★ 公開者のニックネーム
+    silent: !isComplete, // ★ 未完成として公開する場合は通知しない
+    incomplete: !isComplete, // ★ 未完成フラグをサーバーに保存し、他の人の端末にも表示させる
+    first_publish: isFirstPublish, // ★ 追加：通知文言を「公開」/「更新」どちらにするか判定するためのヒント
+    choice_mode: deck.choiceMode || null, // ★ 追加：多肢選択デッキかどうか
+  };
+  if (deck.filename) body.filename = deck.filename;
 ```
 - `cardToServerPayload`（[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）を使うことで、多肢選択デッキの選択肢情報も欠けずに送られます。コメントによれば、以前はここだけ独自に固定6フィールドへ詰め替えていたため、多肢選択デッキを初めて公開した瞬間に選択肢データが失われてしまうバグがあったそうです。
 - `first_publish`：サーバー側の「`filename`が既に存在するかどうか」だけでは判定できない問題への対応です。「作成中」として先行登録済みのデッキ（`announceNewDeckToServer`で既に`filename`が振られている）が、初めて本当に「公開して保存」されたとき、サーバー側からすると`filename`が既にあるので「更新」と判定されてしまい、通知の文言が「新規公開しました」ではなく「更新されました」という誤った内容になってしまう問題があったそうです。`deck.notYetPublished`（一度も公開フローを経ていないか）を見て、「これが実質的な初回公開かどうか」を明示的にサーバーへ伝えることでこれを解決しています。
 
 ```js
-decks = loadDecks();
-const target = decks.find(d => d.id === deckId);
-if (target) {
-  target.filename = data.filename;
-  target.count = target.cards.length;
-  target.cardsLoaded = true;
-  target.published_by = session ? session.nickname : '匿名';
-  target.incomplete = !isComplete;
-  target.notYetPublished = false;
-  saveDecks(decks);
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 10000);
+    const res  = await fetch(`${API_BASE}save_cards`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body), signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '不明なエラー');
+
+    // ★ ここが重要：POST完了までの間にバックグラウンド同期（10秒ごとのポーリング等）
+    //   で decks 配列が再び入れ替わっている可能性があるため、必ずこの時点で
+    //   もう一度 loadDecks() し、id で探し直してから更新・保存する。
+    decks = loadDecks();
+    const target = decks.find(d => d.id === deckId);
+    if (target) {
+      target.filename = data.filename;
+      target.count = target.cards.length;
+      target.cardsLoaded = true; // ★ 今まさに公開したデッキなのでカード本体は既にこの端末にある
+      target.published_by = session ? session.nickname : '匿名';
+      target.incomplete = !isComplete; // ★ 一覧の未完成バッジ表示用に保持（サーバーにも保存済み）
+      target.notYetPublished = false; // ★ 追加：「公開して保存」を実際に経たので、以降は未完成／公開済みで判定する
+      saveDecks(decks);
+    }
+    renderDeckListUI();
+    showBanner(
+      isComplete ? '保存して公開しました！' : '未完成として公開しました（通知なし）',
+      isComplete ? '#dcfce7' : '#fef9c3',
+      isComplete ? '#166534' : '#854d0e',
+      isComplete ? Icons.html('checkCircle', {size:15}) : Icons.html('dot', {size:15})
+    );
+  } catch(e) {
+    showBanner('ローカルに保存しました（GitHub同期失敗）', '#fffbeb', '#92400e', Icons.html('save', {size:15}));
+  }
 }
 ```
 - ここでも「POST完了までの間にバックグラウンドの同期処理で`decks`配列が入れ替わっている可能性がある」ため、更新の直前にもう一度`loadDecks()`で読み直してから対象を探し直す、という同じ慎重さが繰り返されています。CardMaker全体を通じて、**「非同期処理の後は、待っている間に状態が変わっているかもしれないので、古い参照を信用せず必ず最新の状態から探し直す」**という設計方針が徹底されているのが分かります。
@@ -175,7 +209,10 @@ if (target) {
 ```js
 function renderCreatedList() {
   const deck = decks.find(d => d.id === currentDeckId);
-  ...
+  const section = document.getElementById('created-section');
+  const list    = document.getElementById('created-list');
+  if (!deck||!deck.cards.length) { section.style.display='none'; return; }
+  section.style.display='block';
   list.innerHTML = deck.cards.map((c,i) => `
     <div class="created-item" data-key="${esc(cardKey(c))}">
       <span class="drag-handle" title="ドラッグして並び替え">⠿</span>
