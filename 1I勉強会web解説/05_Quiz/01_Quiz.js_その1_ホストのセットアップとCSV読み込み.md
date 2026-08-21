@@ -84,6 +84,20 @@ function renderSelectedDecks() {
 ```
 - 選ばれているデッキが無ければ「デッキを選ぶ」ボタンだけの表示、あれば選ばれたデッキをチップ（小さなタグ）として並べる表示に切り替えます。デッキ選択が固定されている（`hsDeckPickerLocked`）場合は、削除ボタンも「選び直す」ボタンも表示しません。
 
+```js
+function removeSelectedDeck(i) {
+  hsSelectedDecks.splice(i, 1);
+  renderSelectedDecks();
+}
+
+function setHostSource(src) {
+  document.querySelectorAll('#hs-source-toggle .qz-toggle-opt').forEach(b => {
+    b.classList.toggle('active', b.dataset.src === src);
+  });
+  document.getElementById('hs-deck-panel').style.display = src === 'deck' ? '' : 'none';
+  document.getElementById('hs-manual-panel').style.display = src === 'manual' ? '' : 'none';
+}
+```
 `removeSelectedDeck(i)`（358〜361行）は配列から該当インデックスを取り除いて再描画するだけの単純な関数、`setHostSource(src)`（363〜369行）は「デッキから自動作成」「自分で問題を作る」の2つのパネルを切り替えます。
 
 ---

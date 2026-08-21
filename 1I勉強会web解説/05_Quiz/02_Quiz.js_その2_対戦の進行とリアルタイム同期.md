@@ -311,6 +311,44 @@ async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId
 ```
 - 回答ボタンが押された瞬間、**サーバーへの送信を待たずに**、その場でボタンを無効化し、選んだ選択肢をハイライトして「他の人の解答を待っています…」を表示します（[../02_Cardmaker/*](../02_Cardmaker/00_HTML構造とページ全体像.md)で見た「楽観的更新」に近い、見た目の即時反映です）。そのあとで実際にサーバーへ送信し、成功・失敗に関わらず`pollOnce()`で最新状態を取り直します。
 
+```js
+async function hostStart() {
+  const btn = document.getElementById('hl-start-btn');
+  btn.disabled = true;
+  const data = await apiPost('quiz_start', withAuth({ code: roomCode }));
+  if (!data.ok) { btn.disabled = false; showAppAlert({ title: 'エラー', desc: quizErrorText(data.error) }); return; }
+  applyServerNow(data);
+  renderRoom(data.room);
+}
+async function confirmQuitHost() {
+  if (quitting) return;
+  const ok = await showConfirm({
+    title: 'クイズを終了しますか？',
+    desc: '進行中のクイズを終了し、ホームに戻ります。参加者にはそこまでの結果が表示されます。',
+    okLabel: '終了する',
+  });
+  if (!ok) return;
+  quitting = true;
+  await apiPost('quiz_end', withAuth({ code: roomCode }));
+  quitting = false;
+  stopPolling();
+  backToHomeFromResult();
+}
+async function confirmQuitPlayer() {
+  if (quitting) return;
+  const ok = await showConfirm({
+    title: 'クイズから退出しますか？',
+    desc: 'これまでの得点は保存されません。',
+    okLabel: '退出する',
+  });
+  if (!ok) return;
+  quitting = true;
+  await apiPost('quiz_leave', withAuth({ code: roomCode }));
+  quitting = false;
+  stopPolling();
+  backToHomeFromResult();
+}
+```
 `hostStart()`（902〜909行）はロビーからクイズを開始するホスト専用の操作、`confirmQuitHost()`/`confirmQuitPlayer()`（910〜937行）はそれぞれホスト・参加者が確認ダイアログのあとクイズから抜ける処理です。`quitting`フラグで、確認ダイアログを閉じている間の二重実行を防いでいます。
 
 ---
@@ -320,8 +358,30 @@ async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId
 ```js
 const sorted = [...room.players].sort((a, b) => b.score - a.score);
 const podiumOrder = [sorted[1], sorted[0], sorted[2]]; // 2位・1位・3位の順で表示（真ん中が1位）
+const medalMap = [
+  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c0c0c0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><path d="M12 12v6"/></svg>`, // 銀
+  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><path d="M12 12v6"/></svg>`, // 金
+  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><path d="M12 12v6"/></svg>`, // 銅
+];
+const podiumClass = ['qz-podium-2', 'qz-podium-1', 'qz-podium-3'];
+document.getElementById('result-podium').innerHTML = podiumOrder.map((p, i) => {
+  if (!p) return `<div class="qz-podium-col ${podiumClass[i]}"></div>`;
+  return `
+    <div class="qz-podium-col ${podiumClass[i]}">
+      <div class="qz-podium-name">${escapeHtml(p.nickname)}</div>
+      <div class="qz-podium-score">${p.score}点</div>
+      <div class="qz-podium-bar"><span class="qz-podium-medal">${medalMap[i]}</span></div>
+    </div>`;
+}).join('');
+document.getElementById('result-list').innerHTML = sorted.map((p, i) => `
+  <div class="qz-lb-row">
+    <span class="qz-lb-rank">${i + 1}</span>
+    <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
+    <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
+    <span class="qz-lb-score">${p.score}点</span>
+  </div>`).join('');
 ```
-- 得点降順に並べたあと、表彰台の見た目（左に2位、真ん中に1位、右に3位、という一般的な表彰台のレイアウト）に合わせて並び替えています。参加者が2人以下の場合、`sorted[2]`（3位）は`undefined`になりますが、後続の`podiumOrder.map((p, i) => { if (!p) return ...空の列...; ...})`で、存在しない順位は空の列として描画され、エラーにはなりません。
+- 得点降順に並べたあと、表彰台の見た目（左に2位、真ん中に1位、右に3位、という一般的な表彰台のレイアウト）に合わせて並び替えています。参加者が2人以下の場合、`sorted[2]`（3位）は`undefined`になりますが、`podiumOrder.map`内の`if (!p) return ...`分岐で、存在しない順位は空の列（メダル無しの空の`<div>`）として描画され、エラーにはなりません。
 
 `document.getElementById('result-list')`には、上位に限らず**全参加者**の順位・得点を一覧表示します。
 
