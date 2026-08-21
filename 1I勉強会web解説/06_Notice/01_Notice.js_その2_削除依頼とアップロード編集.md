@@ -10,18 +10,37 @@
 async function deleteCurrentNotice() {
   const session = requireLoginOrRedirect();
   if (!session) return;
-  const ok = await showAppConfirm({ title: '削除しますか？', desc: `「${currentViewFilename}」を削除します。この操作は取り消せません。`, okLabel: '削除する', danger: true });
+  if (!currentViewFilename) return;
+  const ok = await showAppConfirm({
+    title: '削除しますか？', desc: `「${currentViewFilename}」を削除します。この操作は取り消せません。`,
+    okLabel: '削除する', danger: true,
+  });
   if (!ok) return;
-  ...
-  const res = await api('/delete_notice', { method: 'POST', body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, filename: currentViewFilename, nickname: session.nickname }) });
-  ...
-  if (res.ok) {
-    closeNoticeModal('view');
-    await loadNotices();
-  } else if (res.error === 'creator_approval_required') {
-    openRequestDeleteModal(currentViewFilename, res.owner_nickname);
-  } else {
-    showAppAlert({ title: '削除に失敗しました', desc: res.error || '' });
+
+  const btn = document.getElementById('view-delete-btn');
+  btn.disabled = true;
+  btn.textContent = '削除中…';
+  try {
+    const res = await api('/delete_notice', {
+      method: 'POST',
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, filename: currentViewFilename, nickname: session.nickname })
+    });
+    btn.disabled = false;
+    btn.textContent = '削除する';
+    if (res.ok) {
+      closeNoticeModal('view');
+      await loadNotices();
+    } else if (res.error === 'creator_approval_required') {
+      // ★ 追加：投稿者本人以外は直接削除できない（サーバー側の作成者確認機能）。
+      //   代わりに投稿者への削除依頼フォームを開く。
+      openRequestDeleteModal(currentViewFilename, res.owner_nickname);
+    } else {
+      showAppAlert({ title: '削除に失敗しました', desc: res.error || '' });
+    }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '削除する';
+    showAppAlert({ title: 'サーバーに接続できませんでした' });
   }
 }
 ```
@@ -31,16 +50,55 @@ async function deleteCurrentNotice() {
 ```js
 function openRequestDeleteModal(filename, ownerNickname) {
   requestDeleteFilename = filename;
-  document.getElementById('request-delete-desc').textContent = `「${filename}」の投稿者（${ownerNickname || '投稿者'}さん）に削除の確認が必要です。理由を書いて送信すると、投稿者にDiscordで確認が届きます。`;
-  ...
+  document.getElementById('request-delete-desc').textContent =
+    `「${filename}」の投稿者（${ownerNickname || '投稿者'}さん）に削除の確認が必要です。理由を書いて送信すると、投稿者にDiscordで確認が届きます。`;
+  document.getElementById('request-delete-reason').value = '';
+  const errEl = document.getElementById('request-delete-err');
+  errEl.style.display = 'none';
+  const btn = document.getElementById('request-delete-submit-btn');
+  btn.disabled = false; btn.textContent = '送信する';
+  document.getElementById('modal-request-delete').classList.add('open');
 }
+
 async function submitRequestDelete() {
-  ...
-  const res = await api('/request_delete', { method: 'POST', body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, category: 'notice', filename: requestDeleteFilename, reason }) });
-  if (!res.ok) throw new Error(res.error || '送信に失敗しました');
-  closeNoticeModal('request-delete');
-  closeNoticeModal('view');
-  showAppAlert({ title: '削除の確認を送りました', desc: res.notified_via === 'web_pending' ? '投稿者がDiscord未連携のため、次回サイトを開いたときに確認されます。' : '投稿者にDiscordで確認を送りました。承認されると削除されます。' });
+  const session = requireLoginOrRedirect();
+  if (!session) return;
+  if (!requestDeleteFilename) return;
+  const reason = document.getElementById('request-delete-reason').value.trim();
+  const errEl = document.getElementById('request-delete-err');
+  errEl.style.display = 'none';
+  if (!reason) {
+    errEl.textContent = '理由を入力してください';
+    errEl.style.display = 'block';
+    return;
+  }
+  const btn = document.getElementById('request-delete-submit-btn');
+  btn.disabled = true;
+  btn.textContent = '送信中…';
+  try {
+    const res = await api('/request_delete', {
+      method: 'POST',
+      body: JSON.stringify({
+        guild_id: GUILD_ID, session_token: session.session_token,
+        category: 'notice', filename: requestDeleteFilename, reason,
+      }),
+    });
+    if (!res.ok) throw new Error(res.error || '送信に失敗しました');
+    closeNoticeModal('request-delete');
+    closeNoticeModal('view');
+    showAppAlert({
+      icon: Icons.html('mailSent', {size:18}),
+      title: '削除の確認を送りました',
+      desc: res.notified_via === 'web_pending'
+        ? '投稿者がDiscord未連携のため、次回サイトを開いたときに確認されます。'
+        : '投稿者にDiscordで確認を送りました。承認されると削除されます。',
+    });
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = '送信する';
+    errEl.textContent = e.message;
+    errEl.style.display = 'block';
+  }
 }
 ```
 - [../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](../02_Cardmaker/03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)の`submitRequestDelete`と同じ仕組みが、こちらは`category: 'notice'`として使われています。サーバー側の`/request_delete`という同じAPIが、デッキとお知らせの両方の削除依頼を共通で扱っていることが分かります。
@@ -53,34 +111,62 @@ async function submitRequestDelete() {
 function openUploadModal() {
   isEditingNotice = false;
   editingOriginalFilename = null;
+
   document.getElementById('upload-filename').value = '';
   document.getElementById('upload-filename').disabled = false;
-  ...
+  document.getElementById('upload-content').value = '';
+  document.getElementById('upload-file-input').value = '';
   document.getElementById('upload-file-input').closest('.field').style.display = '';
-  ...
+  document.getElementById('upload-ok').style.display = 'none';
+  document.getElementById('upload-err').style.display = 'none';
+  document.getElementById('filename-hint').textContent = '';
+  document.getElementById('draft-status').textContent = '';
+
+  document.querySelector('#modal-upload .modal-header h3').textContent = 'お知らせをアップロード';
+  document.querySelector('#modal-upload .btn-primary').textContent = 'アップロードする';
+
   const session = getLoginSession();
+  const display = document.getElementById('upload-uploader-display');
   display.textContent = session ? `${session.nickname} さん` : '未ログイン（匿名として投稿されます）';
+
   switchNoticeTab('edit');
   checkForDraft(DRAFT_KEY_NEW);
+
   document.getElementById('modal-upload').classList.add('open');
 }
 ```
 - 新規投稿用に、全ての入力欄を空にリセットしてからモーダルを開きます。表示だけは未ログインでも「匿名として投稿されます」と案内していますが、実際に送信しようとすると（`submitUpload`内の`requireLoginOrRedirect()`により）ログインを求められます。
 
 ```js
+/** 詳細モーダルの「編集する」から呼ばれる：既存の内容をアップロードモーダルに読み込んで編集モードにする */
 function openEditModal() {
   if (!currentViewFilename) return;
+
   isEditingNotice = true;
   editingOriginalFilename = currentViewFilename;
   closeNoticeModal('view');
+
   document.getElementById('upload-filename').value = currentViewFilename;
   document.getElementById('upload-filename').disabled = false; // ★ 編集時もファイル名（タイトル）を変更可能に
   document.getElementById('upload-content').value = currentViewContent || '';
+  document.getElementById('upload-file-input').value = '';
   document.getElementById('upload-file-input').closest('.field').style.display = 'none';
-  ...
+  document.getElementById('upload-ok').style.display = 'none';
+  document.getElementById('upload-err').style.display = 'none';
+  document.getElementById('filename-hint').textContent = '';
+  document.getElementById('draft-status').textContent = '';
+
   document.querySelector('#modal-upload .modal-header h3').textContent = 'お知らせを編集';
   document.querySelector('#modal-upload .btn-primary').textContent = '更新する';
-  ...
+
+  const session = getLoginSession();
+  const display = document.getElementById('upload-uploader-display');
+  display.textContent = session ? `${session.nickname} さん` : '未ログイン（匿名として更新されます）';
+
+  switchNoticeTab('edit');
+  checkForDraft(draftKeyForEdit(editingOriginalFilename));
+
+  document.getElementById('modal-upload').classList.add('open');
 }
 ```
 - 詳細モーダルの「編集する」から呼ばれ、**同じアップロードモーダルを流用**して、既存の内容を入力欄に反映してから開きます（見た目上はタイトルとボタンの文言だけが「編集」用に変わります）。編集時もファイル名を変えられるようにコメントで明記されているのは、これが「リネーム（3節で解説）」を実現するための重要な設計判断だからです。ファイル選択欄（PCから読み込む）は編集時には不要なので隠されます。
@@ -115,42 +201,85 @@ function onLocalFileSelected(e) {
 ## 3. アップロード（投稿・更新）の送信：`submitUpload()`（596〜667行）
 
 ```js
-if (!filename) { showNoticeErr('upload-err', 'ファイル名を入力してください'); return; }
-if (!/\.(md|txt)$/i.test(filename)) { showNoticeErr('upload-err', 'ファイル名は .md か .txt にしてください'); return; }
-if (!content.trim()) { showNoticeErr('upload-err', '内容が空です'); return; }
+async function submitUpload() {
+  const session = requireLoginOrRedirect();
+  if (!session) return;
+  const filename = document.getElementById('upload-filename').value.trim();
+  const content  = document.getElementById('upload-content').value;
+
+  if (!filename) { showNoticeErr('upload-err', 'ファイル名を入力してください'); return; }
+  if (!/\.(md|txt)$/i.test(filename)) { showNoticeErr('upload-err', 'ファイル名は .md か .txt にしてください'); return; }
+  if (!content.trim()) { showNoticeErr('upload-err', '内容が空です'); return; }
 ```
 - 拡張子は`.md`または`.txt`のみに限定されています。
 
 ### 3.1 上書き確認（606〜619行）
 ```js
-// ★ 同じ名前（既存の別お知らせと同名）で保存しようとした場合は上書き確認する
-//   ・新規投稿で既存と同名 → 上書きするか確認
-//   ・編集でタイトルを既存の別名に変更 → 上書きするか確認
-//   ・編集で元の名前のまま（変更なし） → 確認不要（通常の更新）
-const excludeName = isEditingNotice ? editingOriginalFilename : null;
-const isDuplicate = notices.some(n => n.filename === filename && n.filename !== excludeName);
-if (isDuplicate) {
-  const overwriteOk = await showAppConfirm({ title: '上書きしますか？', desc: `「${filename}」という名前のお知らせは既に存在します。\n上書きしてもよろしいですか？`, okLabel: '上書きする', danger: true });
-  if (!overwriteOk) return;
-}
+  // ★ 同じ名前（既存の別お知らせと同名）で保存しようとした場合は上書き確認する
+  //   ・新規投稿で既存と同名 → 上書きするか確認
+  //   ・編集でタイトルを既存の別名に変更 → 上書きするか確認
+  //   ・編集で元の名前のまま（変更なし） → 確認不要（通常の更新）
+  const excludeName = isEditingNotice ? editingOriginalFilename : null;
+  const isDuplicate = notices.some(n => n.filename === filename && n.filename !== excludeName);
+  if (isDuplicate) {
+    const overwriteOk = await showAppConfirm({
+      title: '上書きしますか？',
+      desc: `「${filename}」という名前のお知らせは既に存在します。\n上書きしてもよろしいですか？`,
+      okLabel: '上書きする', danger: true,
+    });
+    if (!overwriteOk) return;
+  }
 ```
 - 送信しようとしているファイル名が、**自分自身（編集中の元のファイル）を除いて**、既存のどれかと重複していないかチェックします。`excludeName`が「編集中の元のファイル名（変更なしで更新するなら重複チェックに引っかからないように）」または「新規投稿なら`null`（何も除外しない）」となることで、コメントの3つのケースがすべて正しく判定されます。
 
 ### 3.2 実際の送信とリネームの実現（621〜667行）
 ```js
-const res = await api('/upload_notice', { method: 'POST', body: JSON.stringify({ filename, content, uploader, guild_id: GUILD_ID, session_token: session.session_token }) });
-...
-if (res.ok) {
-  // ★ 編集でファイル名（タイトル）が変更された場合は、新しい名前で保存した後に古いファイルを削除して「移動」を完成させる
-  if (editing && editingOriginalFilename && editingOriginalFilename !== filename) {
-    try {
-      await api('/delete_notice', { method: 'POST', body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, filename: editingOriginalFilename, nickname: uploader }) });
-    } catch (e) {
-      // 古いファイルの削除に失敗しても、新しい内容の保存自体は成功しているため処理は続行する
+  const uploader = session.nickname;
+
+  const editing = isEditingNotice;
+  const btnLabel = editing ? '更新する' : 'アップロードする';
+
+  const btn = document.querySelector('#modal-upload .btn-primary');
+  btn.disabled = true;
+  btn.innerHTML = `<span class="spinner"></span>${editing ? '更新中…' : 'アップロード中…'}`;
+  try {
+    // /upload_notice は同名ファイルなら自動的に上書き（更新）してくれるため、
+    // 新規投稿・編集どちらもこのエンドポイントを使う
+    const res = await api('/upload_notice', {
+      method: 'POST',
+      body: JSON.stringify({ filename, content, uploader, guild_id: GUILD_ID, session_token: session.session_token })
+    });
+    btn.disabled = false;
+    btn.textContent = btnLabel;
+    if (res.ok) {
+      // ★ 編集でファイル名（タイトル）が変更された場合は、新しい名前で保存した後に古いファイルを削除して「移動」を完成させる
+      if (editing && editingOriginalFilename && editingOriginalFilename !== filename) {
+        try {
+          await api('/delete_notice', {
+            method: 'POST',
+            body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, filename: editingOriginalFilename, nickname: uploader })
+          });
+        } catch (e) {
+          // 古いファイルの削除に失敗しても、新しい内容の保存自体は成功しているため処理は続行する
+        }
+      }
+      clearDraftAfterSubmit();
+      showNoticeOk('upload-ok');
+      if (editing) {
+        currentViewContent = content;
+        currentViewFilename = filename;
+        editingOriginalFilename = filename;
+      }
+      await loadNotices();
+      setTimeout(() => closeNoticeModal('upload'), 700);
+    } else {
+      showNoticeErr('upload-err', res.error || 'エラーが発生しました');
     }
+  } catch (e) {
+    btn.disabled = false;
+    btn.textContent = btnLabel;
+    showNoticeErr('upload-err', 'サーバーに接続できませんでした');
   }
-  clearDraftAfterSubmit();
-  ...
 }
 ```
 - コメントに「`/upload_notice`は同名ファイルなら自動的に上書き（更新）してくれるため、新規投稿・編集どちらもこのエンドポイントを使う」とあります。
@@ -169,13 +298,23 @@ if (res.ok) {
 //   知らせてもらい、その場で一覧だけ静かに更新し直す。編集中のフォームや
 //   開いているプレビューモーダルはそのまま触らない（一覧の再描画だけ行う）。
 async function checkNoticesUpdate() {
-  ...
-  if (lastNoticesHash === null) { lastNoticesHash = hash; return; }
-  if (hash === lastNoticesHash) return;
-  lastNoticesHash = hash;
-  ...
-  notices = data.notices;
-  renderNotices();
+  try {
+    const res = await fetch(`${API_BASE}list_notices?guild_id=${GUILD_ID}`, { cache: 'no-store' });
+    const txt = await res.text();
+    const hash = await digestMessage(txt);
+
+    // 初回は保存だけ
+    if (lastNoticesHash === null) { lastNoticesHash = hash; return; }
+    // ハッシュが変わっていなければ何もしない
+    if (hash === lastNoticesHash) return;
+    lastNoticesHash = hash;
+
+    let data;
+    try { data = JSON.parse(txt); } catch (e) { return; }
+    if (!data.ok) return;
+    notices = data.notices;
+    renderNotices();
+  } catch (e) {}
 }
 ```
 - 他ページと同じSHA-256ハッシュ比較の仕組みですが、コメントに「編集中のフォームや開いているプレビューモーダルはそのまま触らない（一覧の再描画だけ行う）」と明記されている点が重要です。この関数は`renderNotices()`（一覧の再描画）だけを行い、詳細モーダルやアップロードモーダルの中身には一切触れません。もし誰かが編集モーダルを開いて文章を書いている最中に、裏でこの更新が走ってモーダルの中身まで書き換えてしまったら、入力中の内容が失われる事故になりかねないため、影響範囲を一覧表示だけに限定する、という慎重な設計です。
