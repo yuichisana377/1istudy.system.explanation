@@ -108,7 +108,14 @@ def discord_oauth_start():
         return err
 
     state = issue_oauth_state(guild_id, student_id, purpose="link")
-    authorize_url = "https://discord.com/oauth2/authorize?" + urlencode({...})
+    authorize_url = "https://discord.com/oauth2/authorize?" + urlencode({
+        "client_id":     DISCORD_CLIENT_ID,
+        "redirect_uri":  DISCORD_OAUTH_REDIRECT_URI,
+        "response_type": "code",
+        "scope":         "identify",
+        "state":         state,
+        "prompt":        "consent",
+    })
     return jsonify({"ok": True, "authorize_url": authorize_url})
 ```
 - `discord_login_start`と非常によく似ていますが、決定的な違いが2つあります。
