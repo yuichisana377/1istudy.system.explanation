@@ -145,10 +145,21 @@ const correct = [...new Set(rawNums.map(n => n - 1))].sort((a, b) => a - b);
 
 ### 2.1 専用の取っ手（ハンドル）を使う
 ```js
+// ── マウス操作（PC） ──
 function onMouseDown(e) {
   const handle = e.target.closest('.drag-handle');
   if (!handle) return;
-  ...
+  const item = handle.closest('.created-item');
+  if (!item) return;
+  e.preventDefault();
+  beginDrag(item, e.clientY);
+  window.addEventListener('mousemove', onMouseMove);
+  window.addEventListener('mouseup', onMouseUp, { once: true });
+}
+function onMouseMove(e) { moveDrag(e.clientY); }
+function onMouseUp() {
+  window.removeEventListener('mousemove', onMouseMove);
+  endDrag();
 }
 ```
 - ホーム画面の並び替えは「カード本体のどこでも長押し」でしたが、こちらは「⠿マーク（`.drag-handle`）を掴んだときだけ」ドラッグが始まります。これは、編集画面ではカード自体に「編集」「削除」ボタンがあり、カード本体全体を長押し対象にすると誤操作が増えるための使い分けと考えられます。
@@ -164,14 +175,21 @@ list.addEventListener('touchcancel', onTouchEnd);
 - [05_Cardmaker.js_その5_ホーム画面のドラッグ並び替え.md](05_Cardmaker.js_その5_ホーム画面のドラッグ並び替え.md)の実装はPointer Events（マウスもタッチも統一的に扱える新しい仕組み）を使っていましたが、こちらは`mousedown`/`touchstart`という、より古くからある別々のイベントで実装されています。同じサイトの中でも作られたタイミングによって手法が異なる、という一例です。
 
 ```js
+// ── タッチ操作（スマホ） ──
+// ★ ハンドルに触れた指の identifier だけを追跡し、その指のtouchmoveだけを
+//   ドラッグ処理として扱う（＝preventDefaultする）。もう片方の指のtouchmoveは
+//   ここで何もしないので、ブラウザ標準の縦スクロールがそのまま働く。
+//   これにより「片方の指でカードを移動させながら、もう片方の指でスクロール」ができる。
 function onTouchStart(e) {
   const handle = e.target.closest('.drag-handle');
   if (!handle) return;
-  if (dragTouchId !== null) return;
-  ...
+  if (dragTouchId !== null) return; // 既に別の指でドラッグ中なら何もしない
+  const item = handle.closest('.created-item');
+  if (!item) return;
   const touch = e.changedTouches[0];
   dragTouchId = touch.identifier;
-  ...
+  e.preventDefault();
+  beginDrag(item, touch.clientY);
 }
 function findDragTouch(touchList) {
   if (dragTouchId === null) return null;
@@ -183,22 +201,48 @@ function findDragTouch(touchList) {
 function onTouchMove(e) {
   const t = findDragTouch(e.changedTouches);
   if (!t) return; // ドラッグ中の指以外の動き（＝スクロール用の指）はここで無視する
-  ...
+  e.preventDefault();
+  moveDrag(t.clientY);
+}
+function onTouchEnd(e) {
+  const t = findDragTouch(e.changedTouches);
+  if (!t) return;
+  dragTouchId = null;
+  endDrag();
 }
 ```
 - タッチ操作は複数の指を同時に検知できます（`e.changedTouches`は配列のように複数の指の情報を持てます）。`touch.identifier`は「この指」を区別するための番号です。ハンドルに触れた**その指の番号だけ**を`dragTouchId`として記録し、以降の`touchmove`ではその番号の指の動きだけをドラッグとして扱います。コメントによれば、これにより「片方の指でカードを動かしながら、もう片方の指で画面をスクロールする」という同時操作が可能になっています。
 
 ### 2.3 並び替え結果の反映（133〜160行）
 ```js
-const orderedKeys = getItems().map(it => it.dataset.key);
-const deck = decks.find(d => d.id === currentDeckId);
-const byKey = new Map(deck.cards.map(c => [cardKey(c), c]));
-const newCards = orderedKeys.map(k => byKey.get(k)).filter(Boolean);
-if (newCards.length !== deck.cards.length) { renderCreatedList(); return; } // 念のための整合性チェック
-deck.cards = newCards;
-saveDecks(decks);
-renderCreatedList();
-if (deck.filename) { const ok = await queueSyncDeckToServer(deck); ... }
+async function endDrag() {
+  if (!dragEl) return;
+  if (autoScrollRAF !== null) { cancelAnimationFrame(autoScrollRAF); autoScrollRAF = null; }
+  dragEl.classList.remove('dragging');
+  dragEl.style.transform = '';
+  dragEl.style.zIndex = '';
+  dragEl.style.boxShadow = '';
+  dragEl.style.opacity = '';
+  dragEl.style.position = '';
+  dragEl = null;
+
+  // ★ DOM上の最終的な並び順（data-key）から deck.cards を並び替える
+  const orderedKeys = getItems().map(it => it.dataset.key);
+  const deck = decks.find(d => d.id === currentDeckId);
+  if (!deck) return;
+  const byKey = new Map(deck.cards.map(c => [cardKey(c), c]));
+  const newCards = orderedKeys.map(k => byKey.get(k)).filter(Boolean);
+  if (newCards.length !== deck.cards.length) { renderCreatedList(); return; } // 念のための整合性チェック
+  deck.cards = newCards;
+  saveDecks(decks);
+  renderCreatedList();
+
+  // ★ 公開済みなら並び順もサーバーへ反映する（通知はしない）
+  if (deck.filename) {
+    const ok = await queueSyncDeckToServer(deck);
+    if (!ok) showBanner('並び替えのサーバー反映に失敗しました（ローカルには保存済み）', '#fffbeb', '#92400e', Icons.html('warning', {size:15}));
+  }
+}
 ```
 - ドラッグ終了時の`#created-list`内の実際のDOM順（`data-key`の並び）を読み取り、`cardKey`をキーにした`Map`で実際のカードオブジェクトと突き合わせて、`deck.cards`配列そのものを新しい順序で作り直します。
 - `if (newCards.length !== deck.cards.length)`：万一、対応するカードが見つからない（＝件数が合わない）事態になっていたら、並び替えは反映せず単に再描画するだけにする、という保険が入っています。
@@ -214,11 +258,17 @@ if (deck.filename) { const ok = await queueSyncDeckToServer(deck); ... }
 ```js
 async function openSearchScreen() {
   searchScopeFolderId = currentFolderId;
-  ...
+  searchTargetDecks = null;
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-results').innerHTML = '';
   const scopeLabel = folderPathLabel(searchScopeFolderId);
-  setIconText(document.getElementById('search-scope-label'), ..., scopeLabel ? `${scopeLabel} の中を検索します` : 'すべてのデッキから検索します');
+  setIconText(
+    document.getElementById('search-scope-label'),
+    scopeLabel ? Icons.cmHtml('folder', {size:14}) : Icons.html('logo', {size:14}),
+    scopeLabel ? `${scopeLabel} の中を検索します` : 'すべてのデッキから検索します'
+  );
   showScreen('search');
-  ...
+  setTimeout(() => document.getElementById('search-input').focus(), 200);
   await prepareSearchScope();
 }
 ```
