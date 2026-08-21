@@ -1,0 +1,293 @@
+# Quiz.js その2：対戦の進行とリアルタイム同期（577〜971行）
+
+[[01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md]]の続きです。`Quiz.js`最後のパートです。
+
+---
+
+## 1. ポーリングとSSE（577〜622行）
+
+```js
+function startPolling() {
+  stopPolling();
+  pollOnce();
+  pollHandle = setInterval(pollOnce, 400);
+  tickHandle = setInterval(tickQuizClocks, 200);
+  startQuizRealtime();
+}
+```
+- コメントに「遅延低減：定期ポーリングを1000ms→400msに短縮した上で、他の参加者の操作（参加・開始・回答など）をSSEで即座に検知し、次の定期ポーリングを待たずにその場で取得し直す」とあります。これまでのページ（[[../01_index_予定管理.md]]など）では10秒間隔のポーリングが「SSEが切れたときの保険」でしたが、**早押しクイズという性質上、遅延が致命的**になるため、保険として使うポーリング自体を400ミリ秒という非常に短い間隔にしています。
+- `tickHandle`（200ミリ秒ごと）は、通信を伴わない**見た目だけの更新**（タイマーバーの減り方・カウントダウンの数字）を担当する、別のタイマーです。通信頻度と表示更新頻度を分けることで、通信は400msごとで十分としつつ、見た目の滑らかさは200msごとに保っています。
+
+```js
+function startQuizRealtime() {
+  try {
+    sseHandle = new EventSource(`${API_BASE}events?guild_id=${GUILD_ID}`);
+    sseHandle.onmessage = () => { pollOnce(); };
+  } catch (e) {}
+}
+```
+- SSE通知が届くたびに、次の400msポーリングを待たずすぐさま`pollOnce()`を呼びます。
+
+```js
+async function pollOnce() {
+  if (!roomCode) return;
+  const data = await apiGet('quiz_state', withAuth({ code: roomCode }));
+  if (!data.ok) {
+    if (data.error === 'room_not_found') {
+      stopPolling();
+      await showConfirm({ title: 'このクイズは終了しました', desc: 'ホストが退出したか、時間が経ちすぎたため終了しました。', okLabel: 'ホームに戻る', cancelLabel: '閉じる' });
+      backToHomeFromResult();
+    }
+    return;
+  }
+  isHost = !!data.is_host;
+  applyServerNow(data);
+  renderRoom(data.room);
+}
+```
+- 400msごとに（そしてSSE通知のたびに）、ルームの最新状態を丸ごと取得して`renderRoom()`（2節）に渡すだけの、シンプルな仕組みです。ルームが見つからなくなっていたら（ホストが終了した等）、通知してホームへ戻します。
+
+---
+
+## 2. 状態に応じた画面の出し分け：`renderRoom(room)`（627〜641行）
+
+```js
+function renderRoom(room) {
+  lastRoomSnapshot = room;
+  if (room.state === 'lobby') { renderLobby(room); }
+  else if (room.state === 'countdown') { renderCountdown(room); }
+  else if (room.state === 'intro') { renderIntro(room); }
+  else if (room.state === 'question' || room.state === 'reveal') {
+    if (isHost) renderHostPlay(room); else renderPlayerPlay(room);
+  } else if (room.state === 'ended') { renderResult(room); }
+}
+```
+- サーバーが管理する`room.state`（このルームが今どの段階にあるか）を見て、対応する描画関数に振り分けるだけの、シンプルな「状態遷移に応じた描画」です。**進行のロジック自体（いつ次の状態に移るか）はすべてサーバー側が担当**しており、クライアント側は「今の状態をそのまま描画する」ことに徹しています。これは、[[../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md]]などで見た「サーバーを正とする」設計方針を、ゲーム進行という文脈でも一貫して適用したものです。
+
+### 2.1 カウントダウン画面（643〜661行）
+```js
+let lastCountdownStartedAt = null;
+function renderCountdown(room) {
+  showScreenQ('countdown');
+  const el = document.getElementById('cd-num');
+  el.dataset.startedAt = room.countdown_started_at || '';
+  el.dataset.limit = room.countdown_duration_sec || '';
+  if (room.countdown_started_at !== lastCountdownStartedAt) {
+    lastCountdownStartedAt = room.countdown_started_at;
+    lastCountdownShown = null;
+  }
+}
+```
+- コメントに過去のバグ修正が記録されています：「以前はここで毎回`lastCountdownShown`をリセットしていたため、ポーリング（1秒間隔）のたびに『同じ数字』へポップ演出をやり直してしまい、『5,5,4,4,3,3…』のように各数字が2回ずつ表示されて見えるバグがあった。本当に新しいカウントダウンが始まった時（`countdown_started_at`が変わった時）だけリセットする」。ポーリングの頻度と、実際に表示すべき数字が変わる頻度がズレていることで起きた表示バグを、「開始時刻が変わったときだけ」という条件に直すことで解決しています。
+
+### 2.2 ロビー画面（670〜693行）
+```js
+function renderLobby(room) {
+  const screenId = isHost ? 'host-lobby' : 'player-lobby';
+  showScreenQ(screenId);
+  ...
+  if (isHost) {
+    document.getElementById('hl-count').textContent = `参加者 ${room.players.length}人`;
+    document.getElementById('hl-players').innerHTML = playerChipsHtml(room.players);
+    document.getElementById('hl-start-btn').disabled = room.players.length === 0;
+  } else {
+    document.getElementById('pl-status').textContent = `${room.host_nickname} さんが開始するのを待っています…（参加者 ${room.players.length}人）`;
+    ...
+  }
+}
+```
+- ホストと参加者で表示先の画面ID自体を切り替えつつ、参加者が0人ならホストの「クイズを始める」ボタンを押せなくします。
+
+---
+
+## 3. 出題・回答・正解発表の共通描画：`renderPlayScreen(room, opts)`（695〜786行）
+
+コメントに設計意図が説明されています：「ホストも1人の参加者として一緒に回答する。出題画面はホスト用／プレイヤー用でほぼ同じ処理になるため、共通ロジックをここにまとめる」。`opts`引数として、ホスト画面用・参加者画面用それぞれの要素IDのセットを渡すことで、**1つの関数でどちらの画面も描画できる**ようにしています（`renderHostPlay`/`renderPlayerPlay`、5節）。
+
+### 3.1 問題が変わったかどうかの検知（704〜707行）
+```js
+const qChanged = room.current_q !== renderedQIndex;
+const stateChanged = room.state !== renderedState;
+if (qChanged) hasAnsweredThisQ = false;
+renderedQIndex = room.current_q; renderedState = room.state;
+```
+- `renderedQIndex`/`renderedState`（グローバル変数）に「直近に描画した問題番号・状態」を覚えておき、今回のデータと比較します。問題番号が変わっていれば、`hasAnsweredThisQ`（この問題に回答済みか）フラグをリセットします。
+
+### 3.2 選択肢ボタンの再構築（719〜724行）
+```js
+const choicesEl = document.getElementById(choicesId);
+if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dataset.built) !== room.current_q) {
+  choicesEl.innerHTML = room.question.choices.map((c, i) => `
+    <button class="qz-choice-btn ${CHOICE_CLASSES[i]}" onclick="submitAnswer(${i}, '${choicesId}', '${waitingNoteId}')">${escapeHtml(c)}</button>`).join('');
+  choicesEl.dataset.built = room.current_q;
+}
+```
+- 選択肢ボタン自体は、**問題が変わったとき（または初回）だけ**作り直します。`choicesEl.dataset.built`に「今表示している選択肢がどの問題番号のものか」を記録しておき、それと今回のデータの`current_q`が一致していれば、ボタンの再構築自体をスキップします。400msごとの高頻度なポーリングのたびに、変わっていない部分までDOMを作り直すのは無駄なので、必要なとき（問題が切り替わったとき）だけに絞る最適化です。
+
+### 3.3 選択肢の見た目の更新（726〜743行）
+```js
+[...choicesEl.children].forEach((btn, i) => {
+  const picked = yourAnswer === i;
+  btn.disabled = answered || revealed;
+  btn.classList.toggle('qz-picked', picked);
+  if (revealed) {
+    const isCorrect = i === room.question.correct_index;
+    btn.classList.toggle('qz-correct-flash', isCorrect);
+    btn.classList.toggle('qz-wrong-flash', picked && !isCorrect);
+    btn.classList.toggle('qz-dim', !isCorrect && !picked);
+  } else {
+    btn.classList.remove('qz-correct-flash', 'qz-wrong-flash');
+    btn.classList.toggle('qz-dim', answered && !picked);
+  }
+});
+```
+- 選択肢ボタン自体（3.2節）とは別に、**見た目のクラス（色や薄さ）だけはポーリングのたびに毎回更新**しています。これにより、正解発表（`revealed`）になった瞬間に、正解の選択肢が光り、自分が選んだ間違った選択肢が赤く光る、という演出がスムーズに反映されます。
+- コメントに「回答直後（発表前）も、選んでいない残りの選択肢を薄くして、『自分が押したのはこれ』を最後まではっきり見せ続ける」とあります。
+
+### 3.4 正解・不正解のフィードバック（745〜769行）
+```js
+if (revealed && yourAnswer !== undefined) {
+  feedbackEl.style.display = '';
+  if (room.your_correct) {
+    const bonus = room.first_correct_nickname === STUDENT.nickname;
+    feedbackEl.innerHTML = bonus ? '...一番乗りボーナスで +12点！' : '...正解！ +10点';
+  } else {
+    feedbackEl.innerHTML = '...不正解…';
+  }
+} else if (revealed && yourAnswer === undefined) {
+  feedbackEl.innerHTML = '...時間切れで未回答でした';
+} else if (answered) {
+  waitingNote.style.display = '';
+} else { ... }
+```
+- 「正解した（かつ一番乗りだった）」「正解した（一番乗りではない）」「不正解」「時間切れで未回答」「回答済みで発表待ち」「未回答」という、いくつものパターンを網羅的に出し分けています。正解の基本点は10点、一番乗りボーナスは+2点（合計12点）と、HTMLのヒーロー文言（`正解10点、一番早く正解すると+2点`）と一致する数値がここに実装されています。
+
+### 3.5 正解発表パネル（774〜785行）
+```js
+const revealPanel = document.getElementById(revealPanelId);
+if (room.state === 'reveal') {
+  revealPanel.style.display = '';
+  document.getElementById(firstBadgeId).textContent = room.first_correct_nickname
+    ? `...一番早く正解：${room.first_correct_nickname} さん（+2点ボーナス）`
+    : '...正解者はいませんでした';
+  document.getElementById(leaderboardId).innerHTML = miniLeaderboardHtml(room.players);
+} else {
+  revealPanel.style.display = 'none';
+}
+```
+- コメントに「以前はホスト画面だけに『一番早く正解した人』とミニ順位表を表示していた。参加者にはホストと同じ情報を見せていなかったため、ホスト・参加者共通のこの関数から両方の画面を描画するようにする」という改善の経緯があります。
+
+```js
+function miniLeaderboardHtml(players) {
+  return players.slice(0, 5).map((p, i) => `... ${quizMarkHtml(p)} ...`).join('');
+}
+function quizMarkHtml(p) {
+  if (typeof p.correct === 'undefined') return '';
+  if (!p.answered) return `<span class="qz-lb-mark unanswered" title="未回答">―</span>`;
+  return p.correct ? `<span class="qz-lb-mark correct" title="正解">◯</span>` : `<span class="qz-lb-mark wrong" title="不正解">...</span>`;
+}
+```
+- 上位5人だけに絞ったミニ順位表を、各参加者の◯×付きで表示します。コメントに「正解発表(reveal)中は、サーバーが`players`に`answered`/`correct`を含めて返すようになった」とあり、出題中はこの情報自体が送られてこないため、`quizMarkHtml`はその場合何も表示しません（`p.correct`が`undefined`かどうかで判定）。
+
+---
+
+## 4. タイマーバーとカウントダウンの滑らかな更新（830〜881行）
+
+```js
+function updateTimerBarFor(room, elId) {
+  const el = document.getElementById(elId);
+  if (room.state === 'reveal') {
+    el.dataset.startedAt = room.reveal_started_at || '';
+    el.dataset.limit = room.reveal_duration_sec || '';
+  } else {
+    el.dataset.startedAt = room.question_started_at || '';
+    el.dataset.limit = room.time_limit_sec || '';
+  }
+}
+```
+- タイマーバーの「基準となる開始時刻・制限時間」を、データ属性として要素に保存しておくだけの関数です。実際の見た目の更新（毎フレームのアニメーション）は別のループ（`tickQuizClocks`）が担当します。出題中は「問題の制限時間」、正解発表中は「次の問題へ自動で進むまでの残り時間」を表示する、という切り替えです。
+
+```js
+function tickQuizClocks() {
+  const serverNow = Date.now() + quizClockOffsetMs;
+  ['hp-timerbar', 'pp-timerbar'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el || !el.dataset.startedAt || !el.dataset.limit) return;
+    const started = Number(el.dataset.startedAt) * 1000;
+    const limit = Number(el.dataset.limit) * 1000;
+    const remain = Math.max(0, limit - (serverNow - started));
+    el.style.transform = `scaleX(${remain / limit})`;
+  });
+  tickCountdownNum(serverNow);
+}
+```
+- [[00_HTML構造とその1_起動と参加画面.md]]で見た`quizClockOffsetMs`（時計のズレ補正）を使って、「サーバー時計での今の時刻」を計算し、そこから残り時間の割合を求めて、`scaleX(...)`（CSSの拡大縮小変形）でタイマーバーの幅を表現しています。200ミリ秒ごとにこの計算をやり直すことで、通信なしに滑らかにバーが減っていく演出を実現しています。
+
+```js
+let lastCountdownShown = null;
+function tickCountdownNum(serverNow) {
+  ...
+  const remainSec = Math.max(1, Math.ceil((limit - (serverNow - started)) / 1000));
+  if (remainSec !== lastCountdownShown) {
+    lastCountdownShown = remainSec;
+    el.textContent = String(remainSec);
+    el.style.animation = 'none';
+    void el.offsetWidth; // 強制リフローでスタイルの変更を確定させる
+    el.style.animation = '';
+  }
+}
+```
+- カウントダウンの数字表示です。`el.style.animation = 'none'`のあと`void el.offsetWidth`（要素の幅を読み取るだけの、値を使わない命令）を挟んでから`el.style.animation = ''`に戻す、というテクニックが使われています。コメントに「同じアニメーション名を付け直すだけではブラウザが『変化なし』と判断して再生してくれないため、一度`none`にしてから戻すテクニックを使う」とあります。`el.offsetWidth`を読み取る操作は、ブラウザに「今すぐ実際のレイアウト計算をしてください」と強制する副作用があり（これを**強制リフロー**と呼びます）、これを挟むことで「アニメーション無し」の状態が本当に一度ブラウザに反映されてから、再びアニメーション有りに戻すことができ、結果としてアニメーションを最初からやり直させることができます。
+
+---
+
+## 5. 回答の送信とホスト操作（883〜937行）
+
+```js
+async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId = 'pp-waiting-note') {
+  if (hasAnsweredThisQ) return;
+  hasAnsweredThisQ = true;
+  [...choicesEl.children].forEach((btn, i) => {
+    const picked = i === choiceIndex;
+    btn.disabled = true;
+    btn.classList.toggle('qz-picked', picked);
+    btn.classList.toggle('qz-dim', !picked);
+  });
+  if (waitingNote) waitingNote.style.display = '';
+  await apiPost('quiz_answer', withAuth({ code: roomCode, choice_index: choiceIndex }));
+  pollOnce();
+}
+```
+- 回答ボタンが押された瞬間、**サーバーへの送信を待たずに**、その場でボタンを無効化し、選んだ選択肢をハイライトして「他の人の解答を待っています…」を表示します（[[../02_Cardmaker/*]]で見た「楽観的更新」に近い、見た目の即時反映です）。そのあとで実際にサーバーへ送信し、成功・失敗に関わらず`pollOnce()`で最新状態を取り直します。
+
+`hostStart()`（902〜909行）はロビーからクイズを開始するホスト専用の操作、`confirmQuitHost()`/`confirmQuitPlayer()`（910〜937行）はそれぞれホスト・参加者が確認ダイアログのあとクイズから抜ける処理です。`quitting`フラグで、確認ダイアログを閉じている間の二重実行を防いでいます。
+
+---
+
+## 6. 結果発表：`renderResult(room)`（942〜965行）
+
+```js
+const sorted = [...room.players].sort((a, b) => b.score - a.score);
+const podiumOrder = [sorted[1], sorted[0], sorted[2]]; // 2位・1位・3位の順で表示（真ん中が1位）
+```
+- 得点降順に並べたあと、表彰台の見た目（左に2位、真ん中に1位、右に3位、という一般的な表彰台のレイアウト）に合わせて並び替えています。参加者が2人以下の場合、`sorted[2]`（3位）は`undefined`になりますが、後続の`podiumOrder.map((p, i) => { if (!p) return ...空の列...; ...})`で、存在しない順位は空の列として描画され、エラーにはなりません。
+
+`document.getElementById('result-list')`には、上位に限らず**全参加者**の順位・得点を一覧表示します。
+
+---
+
+## 7. 締めくくり（967〜971行）
+
+```js
+initQuizApp();
+hideLoadingFallback();
+```
+- [[00_HTML構造とその1_起動と参加画面.md]]で説明した起動処理を実際に呼び出し、最後に「読み込み中…」保険オーバーレイを消します。
+
+---
+
+## まとめ
+
+`Quiz.js`は、他ページと共通のパターン（`esc()`によるエスケープ、SSE＋ポーリング、`AbortController`によるタイムアウト）を踏襲しつつ、リアルタイム性が特に重要なこのページ特有の工夫として、**ポーリング間隔を極端に短く（400ms）する**、**通信を伴う更新と見た目だけの更新（200msのtickループ）を分離する**、**サーバー時計とのズレを補正してタイマー表示をピッタリ合わせる**、**DOM要素の再構築を必要最小限に絞る（選択肢ボタンは問題が変わったときだけ作り直す）**といった、ゲームらしい体験のための最適化が随所に見られました。
+
+他ページも同じ形式で解説していきます。
