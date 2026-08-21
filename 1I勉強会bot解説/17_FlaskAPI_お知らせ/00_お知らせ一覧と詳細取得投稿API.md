@@ -114,12 +114,25 @@ def get_notice():
     filename = request.args.get("filename", "")
     if not _is_safe_notice_filename(filename):
         return jsonify({"ok": False, "error": "invalid filename"})
-    ...
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
-    meta, _ = load_notices_meta()
-    m = meta.get(filename, {})
-    return jsonify({"ok": True, "filename": filename, "content": content, "uploader": m.get("uploader"), "uploaded_at": m.get("uploaded_at")})
+    try:
+        path = _data_path(f"{NOTICES_DIR}/{filename}")
+        if not os.path.isfile(path):
+            return jsonify({"ok": False, "error": "not found"})
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        meta, _ = load_notices_meta()
+        m = meta.get(filename, {})
+
+        return jsonify({
+            "ok": True,
+            "filename": filename,
+            "content": content,
+            "uploader": m.get("uploader"),
+            "uploaded_at": m.get("uploaded_at"),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 ```
 - ファイル本文をそのままテキストとして読み込み返します。[Web解説シリーズのNotice.js解説](../../1I勉強会web解説/06_Notice/00_HTML構造とその1_一覧と詳細表示.md)で見た通り、この本文はフロント側でMarkdownとしてレンダリングされる際に、必ず`textContent`/DOM APIを使った安全な組み立て方がされます（サーバー側は特に無害化処理をせず、生のテキストをそのまま返しています）。
 
@@ -195,14 +208,16 @@ def upload_notice():
 ```python
     if guild_id:
         try:
-            ...
-            config = load_config(guild_id_int)
-            channel_id = config.get("notice_channel_id") or config.get("remind_channel_id")
-            channel = bot.get_channel(channel_id) if channel_id else None
-            if channel:
-                action = "更新" if is_update else "公開"
-                msg = f"📢 お知らせ「{filename}」が{uploader}さんによって{action}されました！"
-                asyncio.run_coroutine_threadsafe(channel.send(msg), bot.loop).result(timeout=10)
+            guild_id_int = int(guild_id)
+            guild = bot.get_guild(guild_id_int)
+            if guild:
+                config = load_config(guild_id_int)
+                channel_id = config.get("notice_channel_id") or config.get("remind_channel_id")
+                channel = bot.get_channel(channel_id) if channel_id else None
+                if channel:
+                    action = "更新" if is_update else "公開"
+                    msg = f"📢 お知らせ「{filename}」が{uploader}さんによって{action}されました！"
+                    asyncio.run_coroutine_threadsafe(channel.send(msg), bot.loop).result(timeout=10)
         except Exception as e:
             print(f"[WARN] upload_notice notify failed: {e}")
 

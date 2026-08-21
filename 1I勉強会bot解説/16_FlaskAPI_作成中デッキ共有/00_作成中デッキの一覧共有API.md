@@ -70,10 +70,27 @@ def register_in_progress():
     ・id はフロント側で生成しているデッキのローカルID（他人と衝突しない前提）。
     ・同じ id で既にエントリがある場合は上書きする（念のため）。
     """
-    ...
+    data = request.json or {}
+    draft_id = data.get("id")
+    name     = data.get("name")
+    if not draft_id or not name:
+        return jsonify({"ok": False, "error": "id と name は必須です"})
+
+    creator_nickname = data.get("creator_nickname") or "匿名"
+    err = reject_if_bug_chars({
+        "デッキ名": name,
+        "科目": data.get("subject"),
+        "作成者ニックネーム": creator_nickname,
+    })
+    if err:
+        return err
+
     entry = {
-        "id": draft_id, "name": name, "subject": data.get("subject"),
-        "folder_id": data.get("folder_id"), "creator_id": data.get("creator_id"),
+        "id": draft_id,
+        "name": name,
+        "subject": data.get("subject"),
+        "folder_id": data.get("folder_id"),
+        "creator_id": data.get("creator_id"),
         "creator_nickname": creator_nickname,
         "created_at": datetime.now(JST).strftime("%Y-%m-%d %H:%M:%S"),
     }
@@ -83,7 +100,10 @@ def register_in_progress():
         items.append(entry)
         save_in_progress(items, sha)
         return jsonify({"ok": True})
-    ...
+    except DataWriteError as e:
+        return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 ```
 - 注目すべき点は、**このAPIには`require_login_json`によるログイン確認がありません**。`creator_id`/`creator_nickname`はクライアントからの自己申告のまま使われています。これは、[../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md](../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md)の`/save_cards`と同様に、「作成中」という段階の性質上、厳密な本人確認よりも気軽に使えることを優先した設計だと考えられます（実際に保存される内容も、カードの中身を含まない軽量なメタ情報だけです）。
 - `items = [it for it in items if it.get("id") != draft_id]; items.append(entry)`… 同じ`id`の既存エントリを取り除いてから新しいものを追加する、という「削除してから追加」のやり方で upsert（無ければ挿入・あれば更新）を実現しています。
@@ -92,19 +112,31 @@ def register_in_progress():
 @app.route("/update_in_progress", methods=["POST"])
 def update_in_progress():
     """
+    body: { id, name?, subject?, folder_id? }
+    作成中デッキの名前変更・フォルダ移動をみんなの表示にも反映する。
     該当エントリが無ければ（既に公開済み・削除済みなど）何もせず ok:true を返す。
     """
-    ...
-    for it in items:
-        if it.get("id") == draft_id:
-            if "name" in data:      it["name"]      = data["name"]
-            if "subject" in data:   it["subject"]   = data["subject"]
-            if "folder_id" in data: it["folder_id"] = data["folder_id"]
-            found = True
-            break
-    if found:
-        save_in_progress(items, sha)
-    return jsonify({"ok": True, "found": found})
+    data     = request.json or {}
+    draft_id = data.get("id")
+    if not draft_id:
+        return jsonify({"ok": False, "error": "id は必須です"})
+    try:
+        items, sha = load_in_progress()
+        found = False
+        for it in items:
+            if it.get("id") == draft_id:
+                if "name" in data:      it["name"]      = data["name"]
+                if "subject" in data:   it["subject"]   = data["subject"]
+                if "folder_id" in data: it["folder_id"] = data["folder_id"]
+                found = True
+                break
+        if found:
+            save_in_progress(items, sha)
+        return jsonify({"ok": True, "found": found})
+    except DataWriteError as e:
+        return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 ```
 - `if "name" in data:`のような書き方で、**送られてきたフィールドだけを部分的に更新**します（`data.get("name")`ではなく`"name" in data`を使っているのは、「そもそも送られてこなかった」のか「明示的に空文字列を送ってきた」のかを区別するためです）。
 - コメントにある通り、該当エントリが見つからなくても（既に公開済み・削除済みなどで、そもそも「作成中」ではなくなっている場合）エラーにはせず、`found: false`と共に成功扱いで返します。フロント側の楽観的な更新処理（サーバーの状態を細かく気にせず、とりあえず更新を試みる）が、タイミングの問題でエラー表示になってしまわないようにする配慮です。
@@ -113,11 +145,20 @@ def update_in_progress():
 @app.route("/remove_in_progress", methods=["POST"])
 def remove_in_progress():
     """body: { id } — 公開された・削除された・非公開のまま維持することにした等で不要になったエントリを消す。"""
-    ...
-    new_items = [it for it in items if it.get("id") != draft_id]
-    if len(new_items) != len(items):
-        save_in_progress(new_items, sha)
-    return jsonify({"ok": True})
+    data     = request.json or {}
+    draft_id = data.get("id")
+    if not draft_id:
+        return jsonify({"ok": False, "error": "id は必須です"})
+    try:
+        items, sha = load_in_progress()
+        new_items = [it for it in items if it.get("id") != draft_id]
+        if len(new_items) != len(items):
+            save_in_progress(new_items, sha)
+        return jsonify({"ok": True})
+    except DataWriteError as e:
+        return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)})
 ```
 - これも、[../10_FlaskAPI_時間割/00_時間割の上書きデータとCRUD_API.md](../10_FlaskAPI_時間割/00_時間割の上書きデータとCRUD_API.md)の`/delete_timetable`などと同じ、存在しなくても静かに成功扱いになる**冪等な削除**です。実際に何か削除された場合だけ保存し直す、という最適化も同じパターンです。
 
