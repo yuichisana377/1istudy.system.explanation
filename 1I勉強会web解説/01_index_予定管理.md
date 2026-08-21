@@ -60,11 +60,44 @@ HTMLの細かいタグは全部は追わず、「どこに何のブロックが�
 ### 1.1 JSが壊れたときの保険（12-49行）
 
 ```html
-<div id="js-fail-fallback" ...>「読み込み中です…」＋ 4秒後に出る「そのまま操作する」ボタン ＋ フォーム</div>
+<div id="js-fail-fallback" style="position:fixed;inset:0;z-index:999999;background:#f8fafc;display:flex;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;font-family:sans-serif;">
+  <div style="max-width:340px;width:100%;text-align:center;">
+    <div class="jsfb-spinner" style="width:40px;height:40px;margin:0 auto 16px;border:4px solid #cbd5e1;border-top-color:#2563eb;border-radius:50%;animation:jsfb-spin 1s linear infinite;"></div>
+    <div style="font-size:15px;font-weight:700;color:#1e293b;margin-bottom:6px;">読み込み中です…</div>
+    <div style="font-size:13px;color:#64748b;line-height:1.6;margin-bottom:18px;">しばらく待っても変わらない場合は、下のボタンからそのまま操作するか、問題を報告できます</div>
+    <button type="button" id="jsfb-dismiss" onclick="document.getElementById('js-fail-fallback').remove()" style="display:none;width:100%;margin-bottom:10px;background:#fff;color:#2563eb;border:1px solid #2563eb;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer;">そのまま操作する</button>
+    <details style="text-align:left;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;">
+      <summary style="cursor:pointer;font-size:13px;font-weight:600;color:#475569;">問題を報告する</summary>
+      <form method="POST" action="/api/report_problem" style="margin-top:10px;">
+        <input type="hidden" name="guild_id" value="1509880344806162544">
+        <input type="hidden" name="page" value="予定管理（index.html）">
+        <input type="hidden" name="return_url" value="/index.html">
+        <textarea name="message" rows="3" maxlength="500" placeholder="症状を書いてください（省略可）" style="width:100%;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:8px;padding:8px;font-size:13px;font-family:inherit;resize:vertical;"></textarea>
+        <button type="submit" style="margin-top:8px;width:100%;background:#2563eb;color:#fff;border:none;border-radius:8px;padding:9px;font-size:13px;font-weight:700;cursor:pointer;">送信する</button>
+      </form>
+    </details>
+  </div>
+</div>
+<style>
+@keyframes jsfb-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .jsfb-spinner { animation: none; } }
+</style>
 <script>
+// ★ 追加（2026/08/20）：JSが壊れている・読み込めていない場合でも、この
+//   「読み込み中…」画面に永久に閉じ込められてボタンが一切押せなくなる、
+//   という事態を避けるための安全策（人為的ミスでのJS破損対策）。
+//   正常時はページ側のhideLoadingFallback()がこの要素ごと即座に消すため、
+//   以下は「異常時のみ」発火する保険（外部JSファイルに一切依存しない
+//   インラインscriptなので、Icons.js等が壊れていても必ず実行される）。
 (function () {
-  setTimeout(function () { ... btn.style.display = ''; }, 4000);
-  setTimeout(function () { ... el.remove(); }, 10000);
+  setTimeout(function () {
+    var btn = document.getElementById('jsfb-dismiss');
+    if (btn) btn.style.display = '';
+  }, 4000);
+  setTimeout(function () {
+    var el = document.getElementById('js-fail-fallback');
+    if (el) el.remove();
+  }, 10000);
 })();
 </script>
 ```
@@ -253,7 +286,24 @@ function switchPlanView(v) {
   });
   document.getElementById('plan-sub-plan').classList.toggle('active', v === 'plan');
   document.getElementById('plan-sub-log').classList.toggle('active',  v === 'log');
-  // （中略：絞り込みバーを閉じる処理など）
+
+  // 絞り込みバーの表示切り替え
+  const filterBar = document.getElementById('filter-bar');
+  const filterBtn = document.getElementById('filter-toggle-btn');
+  if (filterBar) {
+    if (v === 'log') {
+      filterBar.classList.remove('open');
+      if (filterBtn) filterBtn.classList.remove('filter-toggle-active');
+    }
+  }
+
+  if (v === 'log') {
+    loadLogs();
+  }
+
+  if (v === 'plan') {
+    setTimeout(scrollToToday, 50);
+  }
 }
 ```
 - ヘッダーの「予定一覧」「ログ」という2つのタブボタンのうち、今選ばれている方だけに`active`（アクティブ＝選択中を示すデザイン用の目印）を付けます。`classList.toggle('active', 条件)`は「条件が本当（true）なら`active`という目印を付ける、嘘（false）なら外す」という命令です。
@@ -263,10 +313,19 @@ function switchPlanView(v) {
 - 244〜246行：予定タブに戻ってきたときは、画面が描き終わるのを少しだけ待ってから（0.05秒後）、今日の予定の位置まで自動でスクロールします。
 
 ```js
-function scrollLogsTop() { /* ログの先頭までスクロール */ }
+function scrollLogsTop() {
+  const el = document.getElementById('log-content');
+  if (!el) return;
+  window.scrollTo({ top: el.offsetTop - 70, behavior: 'smooth' });
+}
+
 function onTodayButton() {
   const isLog = document.getElementById('plan-sub-log').classList.contains('active');
-  if (isLog) scrollLogsTop(); else scrollToToday();
+  if (isLog) {
+    scrollLogsTop();
+  } else {
+    scrollToToday();
+  }
 }
 ```
 - ヘッダーの「今日」ボタンは、今どちらのタブを見ているかによって挙動が変わる共通ボタンです：ログタブを見ているならログの先頭へ、予定タブを見ているなら今日の日付の位置へスクロールします。
@@ -360,25 +419,86 @@ async function loadMorePastPlans() {
 
 ```js
 function scrollToToday() {
-  // 今表示されている予定の中から、スクロール先の日付を決める
-  // ①今日ぴったりの予定があればそこ
-  // ②無ければ一番近い未来の日
-  // ③未来の予定が1件も無ければ、一番新しい過去の日
-  // 該当する日付のかたまりを画面上で探し、ヘッダーに隠れない位置までスクロールする
+  const today = todayLocalStr();
+  const filtered = getFilteredPlans();
+  let targetDate = null;
+
+  if (filtered.some(p => p.date === today)) {
+    targetDate = today;
+  } else {
+    const future = filtered.filter(p => p.date > today).map(p => p.date).sort();
+    targetDate = future[0];
+  }
+  if (!targetDate) {
+    targetDate = filtered.map(p => p.date).sort().slice(-1)[0];
+  }
+
+  const targetEl = document.querySelector(`.date-group[data-date="${targetDate}"]`);
+  if (!targetEl) return;
+
+  const offset = targetEl.getBoundingClientRect().top + window.pageYOffset - 70;
+
+  window.scrollTo({
+    top: offset,
+    behavior: 'auto'
+  });
 }
 ```
-- 実際のコードでは、`Array`の`filter`（条件に合うものだけ残す）や`sort`（並べ替え）といった命令を組み合わせて上記の判定をしています。
+- 今表示されている予定（絞り込み後）の中から、スクロール先の日付を3段階で決めます：①今日ぴったりの予定があればそこ、②無ければ一番近い未来の日、③未来の予定が1件も無ければ、一番新しい過去の日。
+- 該当する日付のかたまり（`data-date`属性を目印にした`.date-group`要素）を画面上で探し、`getBoundingClientRect().top`（今の画面内での上端位置）を使って、ヘッダーに隠れない位置（70px分ずらす）までスクロールします。
 
 ---
 
 ## 10. 変更履歴（ログ）タブの読み込み（369〜414行）
 
-`loadLogs()`と`loadMoreLogs()`は9節の予定版とほぼ同じ考え方の関数で、問い合わせ先が`/list_logs`、保存先の変数が`logsData`に変わっただけです。
+`loadLogs()`と`loadMoreLogs()`は9節の予定版とほぼ同じ考え方の関数で、問い合わせ先が`/list_logs`、保存先の変数が`logsData`に変わっただけです（予定と違って「未来/過去」の分け方は無く、単純に新しい順から必要な分だけ取っていく方式です）。
 
+```js
+async function loadLogs() {
+  document.getElementById('log-loading').style.display = 'block';
+  document.getElementById('log-content').innerHTML = '';
+  logsData    = [];
+  logsOffset  = 0;
+  logsHasMore = false;
+
+  // 最新から1ページ分だけ読み込んで、すべて読み込む前に表示する
+  try {
+    const data = await api(`/list_logs?guild_id=${GUILD_ID}&offset=0&limit=${LOGS_PAGE_SIZE}`);
+    if (data.ok) {
+      logsData    = data.logs;
+      logsOffset  = data.logs.length;
+      logsHasMore = !!data.has_more;
+    }
+  } catch(e) { logsData = []; }
+  document.getElementById('log-loading').style.display = 'none';
+  renderLogs();
+}
+
+/** ログを1ページ分読み込んで既存の logsData に追加する（「もっと読み込む」ボタンから呼ばれる） */
+async function loadMoreLogs() {
+  if (logsLoading) return;
+  logsLoading = true;
+  const btn = document.getElementById('log-load-more-btn');
+  if (btn) setLoading(btn, '読み込み中…', true);
+
+  try {
+    const data = await api(`/list_logs?guild_id=${GUILD_ID}&offset=${logsOffset}&limit=${LOGS_PAGE_SIZE}`);
+    if (data.ok) {
+      logsData = logsData.concat(data.logs);
+      logsOffset += data.logs.length;
+      logsHasMore = !!data.has_more;
+    } else {
+      logsHasMore = false;
+    }
+  } catch(e) {
+    logsHasMore = false;
+  }
+  logsLoading = false;
+  renderLogs();
+}
+```
 - `loadLogs()`：状態をリセット →「新しい方から50件」を取得 → 画面に描画。
 - `loadMoreLogs()`：二重に走らないようにチェック → 続きの50件を`logsOffset`（今どこまで読んだか）から取得して足し合わせる → 画面に再描画。
-
-（予定と違って「未来/過去」の分け方は無く、単純に新しい順から必要な分だけ取っていく方式です。）
 
 ---
 
@@ -421,7 +541,12 @@ function toggleSubjFilter(btn) {
   btn.classList.add('chip-active');
   renderPlans();
 }
-function toggleCatFilter(btn) { /* 同じ考え方で filterCat を更新する */ }
+function toggleCatFilter(btn) {
+  filterCat = btn.dataset.cat;
+  btn.closest('.filter-chips').querySelectorAll('.chip').forEach(c => c.classList.remove('chip-active'));
+  btn.classList.add('chip-active');
+  renderPlans();
+}
 ```
 - チップがクリックされたら、そのチップが持っている`data-subj`（HTML部品に埋め込んでおいた属性値）を新しい絞り込み条件として保存し、同じグループの他のチップから「選択中」の見た目を外して、自分だけに付け直します（＝一度に1つしか選べないようにする）。最後に一覧を再描画します。
 
@@ -430,7 +555,36 @@ function toggleCatFilter(btn) { /* 同じ考え方で filterCat を更新する 
 ## 12. 時間割の順番で並べ替える（470〜522行）
 
 ```js
-const TIMETABLE = { mon: [...], tue: [...], wed: [...], thu: [...], fri: [...] };
+const TIMETABLE = {
+  mon: [
+    { subject: "コンピュータリテラシ", items: ["教科書"] },
+    { subject: "情報技術概論",         items: ["教科書", "プリント"] },
+    { subject: "国語1乙a",             items: ["教科書", "資料集", "辞書"] },
+  ],
+  tue: [
+    { subject: "化学1a",     items: ["教科書", "ワーク"] },
+    { subject: "情報基礎",   items: ["教科書"] },
+    { subject: "線形数学1a", items: ["教科書", "ノート", "ワーク"] },
+    { subject: "地理a",      items: ["教科書", "資料集", "地図帳"] },
+  ],
+  wed: [
+    { subject: "物理1a",     items: ["教科書", "プリント"] },
+    { subject: "体育1a",     items: ["体操服", "教科書"] },
+    { subject: "英語会話a",  items: ["教科書", "多読手帳"] },
+    { subject: "その他",     items: [] },
+  ],
+  thu: [
+    { subject: "情報工学ゼミ1", items: [] },
+    { subject: "公共a",         items: ["教科書", "資料集", "プリント"] },
+    { subject: "基礎解析1a",    items: ["教科書", "ワーク", "ノート"] },
+    { subject: "国語1甲a",      items: ["国語ノート"] },
+  ],
+  fri: [
+    { subject: "英語表現基礎a",           items: ["英語教科書", "辞書"] },
+    { subject: "基礎解析",                items: ["教科書", "ノート"] },
+    { subject: "英語コミュニケーション1a", items: ["英語教科書"] },
+  ],
+};
 const WDAY_KEYS = ['sun','mon','tue','wed','thu','fri','sat'];
 ```
 - 曜日ごとに「時間割上、何番目にどの科目があるか」をあらかじめプログラムの中に書き込んである一覧です（Timetableページのデータとは別に、このページ専用にここへ直接書かれています＝1年間このままという前提のため）。
@@ -475,10 +629,66 @@ function parsePlanContent(raw) {
 - `rest.split(NOTE_SEP)`で、区切り文字（`NOTE_SEP`）の前後を「本文」と「備考」に分けます。
 
 `renderPlans()`（536〜588行）は、予定一覧の描画の中心となる関数です：
-- 542〜544行：まだ読み込んでいない過去分があれば「さらに過去の予定を読み込む」ボタンを用意（無ければ何も用意しない）。
-- 546〜551行：絞り込んだ結果が0件なら、「そもそも予定が無い」のか「絞り込みの結果0件になった」のかでメッセージを出し分けて処理を終える。
-- 553〜555行：今日の日付を取得し、予定を日付ごとのグループにまとめる。
-- 557行以降：日付を古い順に並べながら、日付ごとに1つのまとまり（`<div class="date-group">`）を作る。
+
+```js
+function renderPlans() {
+  const el = document.getElementById('plan-content');
+  const filtered = getFilteredPlans();
+
+  // ★ 日付は昇順（過去→未来）で並ぶため、「もっと読み込む」で追加される
+  //   過去の予定は一番上に来る。ボタンも一覧の先頭に置く。
+  const loadMoreHtml = pastPlansHasMore
+    ? `<button type="button" id="plan-load-more-btn" class="load-more-btn" onclick="loadMorePastPlans()">さらに過去の予定を読み込む</button>`
+    : '';
+
+  if (!filtered.length) {
+    el.innerHTML = loadMoreHtml + (plans.length
+      ? '<div class="empty-msg">条件に一致する予定はありません</div>'
+      : '<div class="empty-msg">予定はありません</div>');
+    return;
+  }
+
+  const today = todayLocalStr();
+  const grouped = {};
+  filtered.forEach(p => { (grouped[p.date] = grouped[p.date] || []).push(p); });
+
+  el.innerHTML = loadMoreHtml + Object.keys(grouped).sort().map(date => {
+    const d = new Date(date + 'T00:00:00');
+    const label = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${WDAYS[d.getDay()]}）`;
+
+    const isToday = date === today;
+    const isPast  = date < today;
+
+    // ★ 時間割順に並べ替え
+    const dayPlans = sortByTimetable(date, grouped[date]);
+
+    const rows = dayPlans.map(p => {
+      const { cat, text, note } = parsePlanContent(p.content);
+      const ptsBadge = (p.points != null)
+        ? `<span class="badge badge-pts"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M12 3.5l2.5 5.3 5.8.8-4.2 4.1 1 5.8-5.1-2.7-5.1 2.7 1-5.8-4.2-4.1 5.8-.8Z"/></svg> ${p.points}pt</span>`
+        : '';
+      const noteDot = note ? `<span class="note-dot" title="備考あり"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#d97706" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M6 4h9l3 3v13H6Z"/><path d="M15 4v3h3"/><path d="M9 13h6"/><path d="M9 17h6"/><path d="M9 9h3"/></svg></span>` : '';
+      const label = `${p.date}/${p.subject}${p.content}`;
+      return `<div class="plan-row" data-label="${esc(label)}" onclick="showPlanDetail(this)">
+        <span class="subject">${esc(p.subject)}</span>
+        <span class="badge badge-${esc(cat)}">${esc(cat)}</span>
+        <span class="content">${esc(text)}</span>
+        ${noteDot}
+        ${ptsBadge}
+      </div>`;
+    }).join('');
+
+    return `<div class="date-group ${isPast ? 'past' : ''}" data-date="${date}">
+      <div class="date-label">${label}${isToday ? '<span class="today-tag">今日</span>' : ''}</div>
+      <div class="date-card">${rows}</div>
+    </div>`;
+  }).join('');
+}
+```
+- まだ読み込んでいない過去分があれば「さらに過去の予定を読み込む」ボタンを用意（無ければ何も用意しない）。
+- 絞り込んだ結果が0件なら、「そもそも予定が無い」のか「絞り込みの結果0件になった」のかでメッセージを出し分けて処理を終える。
+- 今日の日付を取得し、予定を日付ごとのグループ（`grouped`）にまとめる。
+- 日付を古い順に並べながら、日付ごとに1つのまとまり（`<div class="date-group">`）を作る。
   - 「2026年8月20日（木）」のような日本語の日付表示を作成。
   - 今日かどうか・過去かどうかを判定（`YYYY-MM-DD`という形式の文字列は、そのまま文字として比較しても日付の前後関係と一致するので、特別な計算をせず単純な比較で済んでいます）。
   - その日の予定を12節の関数で時間割順に並べ替え。
@@ -497,9 +707,26 @@ function showPlanDetail(el) {
   const label = el.dataset.label;
   const plan = plans.find(p => `${p.date}/${p.subject}${p.content}` === label);
   if (!plan) return;
-  detailTarget = label;
+
+  detailTarget = label; // ★ 編集・削除ボタンから参照できるように保存
+
   const { cat, text, note } = parsePlanContent(plan.content);
-  // ...詳細欄のHTMLを組み立てる...
+  const d = new Date(plan.date + 'T00:00:00');
+  const dateLabel = `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日（${WDAYS[d.getDay()]}）`;
+
+  const rowsHtml = [
+    `<div class="detail-item"><div class="dl-label">日付</div><div class="dl-value">${esc(dateLabel)}</div></div>`,
+    `<div class="detail-item"><div class="dl-label">科目</div><div class="dl-value">${esc(plan.subject)}</div></div>`,
+    `<div class="detail-item"><div class="dl-label">カテゴリ</div><div class="dl-value"><span class="badge badge-${esc(cat)}">${esc(cat)}</span></div></div>`,
+    `<div class="detail-item"><div class="dl-label">内容</div><div class="dl-value">${esc(text)}</div></div>`,
+  ];
+  if (plan.points != null) {
+    rowsHtml.push(`<div class="detail-item"><div class="dl-label">ポイント</div><div class="dl-value"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M12 3.5l2.5 5.3 5.8.8-4.2 4.1 1 5.8-5.1-2.7-5.1 2.7 1-5.8-4.2-4.1 5.8-.8Z"/></svg> ${plan.points}pt</div></div>`);
+  }
+  if (note) {
+    rowsHtml.push(`<div class="detail-item"><div class="dl-label">備考</div><div class="dl-value dl-note">${esc(note)}</div></div>`);
+  }
+
   document.getElementById('detail-content').innerHTML = rowsHtml.join('');
   document.getElementById('modal-detail').classList.add('open');
 }
@@ -509,7 +736,18 @@ function showPlanDetail(el) {
 - 日付・科目・カテゴリ・内容・（あれば）ポイント・（あれば）備考を、それぞれエスケープ済みの表示にして詳細欄に流し込み、ポップアップを開きます。
 
 ```js
-function selectPlanByLabel(label, mode) { /* 一覧の中から同じ目印を持つ項目を探して選択状態にする */ }
+/** 選択リスト(edit-list / del-list)の中から label が一致する項目を選択状態にする */
+function selectPlanByLabel(label, mode) {
+  const listId = mode === 'edit' ? 'edit-list' : 'del-list';
+  const items = document.querySelectorAll(`#${listId} .sel-item`);
+  for (const it of items) {
+    if (it.dataset.label === label) {
+      selectPlan(it, mode);
+      it.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      break;
+    }
+  }
+}
 function editFromDetail() {
   if (!detailTarget) return;
   closeModal('detail'); openModal('edit'); selectPlanByLabel(detailTarget, 'edit');
@@ -562,7 +800,18 @@ function renderChannelOptions() {
 
 ```js
 function renderSelectList(containerId, mode) {
-  // plans全件から、編集・削除で使う「対象を選ぶ一覧」を組み立てる
+  const el = document.getElementById(containerId);
+  if (!plans.length) { el.innerHTML = '<div class="empty-msg">予定がありません</div>'; return; }
+  el.innerHTML = plans.map(p => {
+    const label = `${p.date}/${p.subject}${p.content}`;
+    const { cat, text } = parsePlanContent(p.content);
+    return `<div class="sel-item" data-label="${esc(label)}" onclick="selectPlan(this,'${mode}')">
+      <span class="si-date">${esc(p.date)}</span>
+      <span class="si-subject">${esc(p.subject)}</span>
+      <span class="badge badge-${esc(cat)}">${esc(cat)}</span>
+      <span class="si-content">${esc(text)}</span>
+    </div>`;
+  }).join('');
 }
 ```
 - 編集・削除ポップアップに表示する「どの予定を対象にするか選ぶ一覧」を作る共通の関数です。`mode`によって、クリックしたときの動きが編集用・削除用で変わります。
@@ -573,9 +822,31 @@ function selectPlan(el, mode) {
   el.classList.add('selected');
   if (mode === 'edit') {
     editTarget = el.dataset.label;
-    const plan = plans.find(p => `${p.date}/${p.subject}${p.content}` === el.dataset.label);
-    // 見つかった予定の今の内容を、編集フォームの入力欄にあらかじめ入れておく
-    // （何も変更せずそのまま保存すれば、内容が変わらないようにするため）
+
+    // ★ 選択した予定に既にポイントがあれば編集欄のヒントとして反映
+    const label = el.dataset.label;
+    const plan = plans.find(p => `${p.date}/${p.subject}${p.content}` === label);
+    const ptsWrap  = document.getElementById('edit-points-wrap');
+    if (plan) {
+      const { cat, text, note } = parsePlanContent(plan.content);
+
+      // ★ 内容・備考は現在の値を編集欄に入れておく（そのまま保存すれば変更なし）
+      document.getElementById('edit-content').value = text;
+      document.getElementById('edit-note').value = note;
+
+      // ★ その他カテゴリでも任意でポイントを付けられるように、カテゴリを問わず表示する
+      ptsWrap.style.display = 'block';
+      // 既存のポイントが選択肢内にあればプリセット、なければ未選択のまま
+      selectedPoints['edit'] = POINT_OPTIONS.includes(plan.points) ? plan.points : null;
+      renderPointsChips('edit');
+      const label = ptsWrap.querySelector('.pts-label');
+      if (label) {
+        const base = POINT_CATEGORIES.includes(cat) ? 'ポイント' : 'ポイント（任意）';
+        label.textContent = (plan.points != null)
+          ? `${base}（現在: ${plan.points}pt・変更しない場合は未選択のまま）`
+          : `${base}（変更しない場合は未選択のまま）`;
+      }
+    }
   } else {
     delTarget = el.dataset.label;
     document.getElementById('del-label').textContent = el.dataset.label;
@@ -584,7 +855,7 @@ function selectPlan(el, mode) {
 }
 ```
 - 一覧の中で今選んでいる項目に「選択中」の見た目を付け直します。
-- 編集モードのときは、選んだ予定の今の内容（本文・備考・ポイント）をあらかじめ入力欄に入れておきます。これにより、変えたい項目だけを書き換えて保存すれば、それ以外は元のまま維持されます。
+- 編集モードのときは、選んだ予定の今の内容（本文・備考・ポイント）をあらかじめ入力欄に入れておきます。これにより、変えたい項目だけを書き換えて保存すれば、それ以外は元のまま維持されます。既にポイントが付いている予定なら、そのポイントを選択肢内にプリセットし、ポイント欄のラベルに「現在: ○pt」と表示します。
 - 削除モードのときは、選んだ予定の内容を確認文言として表示するだけです。
 
 ---
@@ -598,7 +869,11 @@ function toggleFab() {
   document.getElementById('fab-main').classList.toggle('open', open);
   document.getElementById('fab-overlay').classList.toggle('open', open);
 }
-function closeFab() { /* 上と同じ3つの部品から「開いている」印を外すだけ */ }
+function closeFab() {
+  document.getElementById('fab-actions').classList.remove('open');
+  document.getElementById('fab-main').classList.remove('open');
+  document.getElementById('fab-overlay').classList.remove('open');
+}
 ```
 - 右下の＋ボタン（FAB）を押すたびに、今の開閉状態を反転させて、関係する3つの部品（小さいボタン群・ボタン自身のアニメーション・背景の暗いオーバーレイ）に同じ状態を反映します。
 
@@ -606,9 +881,21 @@ function closeFab() { /* 上と同じ3つの部品から「開いている」印
 function openModal(name) {
   closeFab();
   document.getElementById('modal-' + name).classList.add('open');
-  if (name === 'add')  { /* 追加用の初期化 */ }
-  if (name === 'edit') { /* 編集用の初期化（過去の日付も選べるようにする等） */ }
-  if (name === 'delete') { /* 削除用の初期化 */ }
+  if (name === 'add')    {
+    initCal('add', false);
+    selectedPoints['add'] = null;
+    updatePointsVisibility('add');
+  }
+  if (name === 'edit')   {
+    initCal('edit', true);
+    editTarget = null;
+    renderSelectList('edit-list', 'edit');
+    selectedPoints['edit'] = null;
+    document.getElementById('edit-points-wrap').style.display = 'none';
+    document.getElementById('edit-content').value = '';
+    document.getElementById('edit-note').value = '';
+  }
+  if (name === 'delete') { delTarget = null; renderSelectList('del-list', 'delete'); document.getElementById('del-confirm').style.display = 'none'; }
 }
 function closeModal(name) {
   document.getElementById('modal-' + name).classList.remove('open');
@@ -628,9 +915,11 @@ function onBgClick(e, name) {
 
 ```js
 function updatePointsVisibility(prefix) {
-  const cat = getCatValue(prefix);
+  const cat  = getCatValue(prefix);
   const wrap = document.getElementById(prefix + '-points-wrap');
   if (!wrap) return;
+  // ★ カテゴリが「提出」「宿題」以外でも、カテゴリさえ決まっていれば
+  //   任意でポイントを付けられるように表示する
   wrap.style.display = cat ? 'block' : 'none';
   if (cat) renderPointsChips(prefix);
 }
@@ -638,12 +927,39 @@ function updatePointsVisibility(prefix) {
 - カテゴリが（自由入力も含めて）何か決まっていればポイント選択欄を表示し、決まっていなければ欄ごと隠します。
 
 ```js
+/** ポイント選択チップ（3 / 5 / 10 / 15）を描画する */
 function renderPointsChips(prefix) {
-  // 3・5・10・15ptのボタンを、現在選ばれている値だけ「選択中」の見た目にして作る
-  // 提出・宿題カテゴリで、追加時に未選択なら自動的に5ptを選んでおく
+  const wrap = document.getElementById(prefix + '-points-wrap');
+  if (!wrap) return;
+  const cat      = getCatValue(prefix);
+  const required = POINT_CATEGORIES.includes(cat);
+  // ★ 必須カテゴリ（提出・宿題）で追加時は未選択なら5ptをデフォルトで選択状態にする
+  //   それ以外のカテゴリは任意なので、明示的に選ぶまで未選択のまま
+  if (prefix === 'add' && required && selectedPoints[prefix] == null) {
+    selectedPoints[prefix] = 5;
+  }
+  const current = selectedPoints[prefix];
+  const chips = POINT_OPTIONS.map(v =>
+    `<button type="button" class="chip pts-chip${current === v ? ' chip-active' : ''}" data-pts="${v}" onclick="pickPoints('${prefix}', ${v})">${v}pt</button>`
+  ).join('');
+  const labelText = required ? 'ポイント' : 'ポイント（任意）';
+  wrap.innerHTML = `
+    <div class="pts-label">${labelText}</div>
+    <div class="filter-chips pts-chips">${chips}</div>
+  `;
 }
+
+/** ポイントチップがクリックされたとき */
 function pickPoints(prefix, val) {
-  // 任意カテゴリのときだけ、同じボタンをもう一度押すと選択解除できる
+  const cat      = getCatValue(prefix);
+  const required = POINT_CATEGORIES.includes(cat);
+  // ★ 任意カテゴリは、選択中のチップをもう一度押すと選択解除できる（＝ポイントなし）
+  if (!required && selectedPoints[prefix] === val) {
+    selectedPoints[prefix] = null;
+  } else {
+    selectedPoints[prefix] = val;
+  }
+  renderPointsChips(prefix);
 }
 ```
 - `prefix`は「追加画面（`add`）か、編集画面（`edit`）か」を表す文字列です。同じ関数を両方の画面で使い回せるようにするための工夫です。
@@ -654,6 +970,55 @@ function pickPoints(prefix, val) {
 ## 19. 追加・編集・削除の送信処理（830〜946行）
 
 ### 19.1 `submitAdd()`（833〜879行）— 予定を追加する
+```js
+async function submitAdd() {
+  const session = requireLoginOrRedirect();
+  if (!session) return;
+  const date     = calState['add']?.selected;
+  const subject  = document.getElementById('add-subject').value;
+  const category = getCatValue('add');
+  if (!category) { showErr('add-err', 'カテゴリを入力してください'); return; }
+  const content  = document.getElementById('add-content').value.trim();
+  if (!date || !subject || !content) { showErr('add-err', '日付・科目・内容は必須です'); return; }
+  const note = document.getElementById('add-note').value.trim();
+  const contentToSend = note ? `${content}${NOTE_SEP}${note}` : content;
+
+  const body = { guild_id: GUILD_ID, session_token: session.session_token, date, subject, category, content: contentToSend, nickname: session.nickname };
+
+  if (POINT_CATEGORIES.includes(category)) {
+    const points = selectedPoints['add'];
+    if (!points) { showErr('add-err', 'ポイントを選択してください'); return; }
+    body.points = points;
+  } else if (selectedPoints['add']) {
+    // ★ その他カテゴリは任意。選択されていれば送る
+    body.points = selectedPoints['add'];
+  }
+
+  const btn = document.querySelector('#modal-add .btn-primary');
+  setLoading(btn, '登録中…');
+  try {
+    const res = await api('/add_schedule', {
+      method: 'POST',
+      body: JSON.stringify(body)
+    });
+    resetLoading(btn, '追加する');
+    if (res.ok) {
+      showOk('add-ok');
+      document.getElementById('add-content').value = '';
+      document.getElementById('add-note').value = '';
+      selectedPoints['add'] = null;
+      document.getElementById('add-points-wrap').style.display = 'none';
+      resetCal('add', '日付を選択');
+      await loadPlans();
+    } else {
+      showErr('add-err', res.message || 'エラーが発生しました');
+    }
+  } catch(e) {
+    resetLoading(btn, '追加する');
+    showErr('add-err', 'サーバーに接続できませんでした');
+  }
+}
+```
 1. まずログインしているか確認し、していなければ処理を中断します。
 2. カレンダーで選ばれた日付・選ばれた科目・カテゴリを取り出します。カテゴリが空、または日付/科目/内容のどれかが空なら、エラーメッセージを表示して処理を中断します。
 3. 備考が入力されていれば、区切り文字でつなげて1本の文字列にします。
@@ -664,10 +1029,79 @@ function pickPoints(prefix, val) {
 8. 失敗したら（サーバーがエラーを返した場合、または通信自体が失敗した場合）：ボタンを元に戻し、エラーメッセージを表示します。
 
 ### 19.2 `submitEdit()`（881〜920行）— 予定を編集する
-- 基本的な流れは追加と同じですが、大きな違いは**入力・選択されている項目だけをサーバーに送る**点です。日付欄が空欄のままなら日付は送らない、科目欄が空欄のままなら科目は送らない、というように、「変更しなかった項目には触れない」形でデータを組み立てます。これは、サーバー側が「送られてきた項目だけを書き換える」という仕組みになっているためです。
+```js
+async function submitEdit() {
+  const session = requireLoginOrRedirect();
+  if (!session) return;
+  if (!editTarget) { showErr('edit-err', '予定を選択してください'); return; }
+  const body = { guild_id: GUILD_ID, session_token: session.session_token, target: editTarget, nickname: session.nickname };
+  const d = calState['edit']?.selected; if (d) body.date = d;
+  const s = document.getElementById('edit-subject').value;   if (s) body.subject = s;
+  const c = getCatValue('edit'); if (c) body.category = c;
+  const t = document.getElementById('edit-content').value.trim();
+  const n = document.getElementById('edit-note').value.trim();
+  if (t) body.content = n ? `${t}${NOTE_SEP}${n}` : t;
+
+  if (selectedPoints['edit']) body.points = selectedPoints['edit'];
+
+  const btn = document.querySelector('#modal-edit .btn-primary');
+  setLoading(btn, '保存中…');
+  try {
+    const res = await api('/edit_schedule', { method: 'POST', body: JSON.stringify(body) });
+    resetLoading(btn, '保存する');
+    if (res.ok) {
+      showOk('edit-ok');
+      editTarget = null;
+      document.getElementById('edit-content').value = '';
+      document.getElementById('edit-note').value = '';
+      document.getElementById('edit-category-sel').value = '';
+      document.getElementById('edit-category-inp').style.display = 'none';
+      document.getElementById('edit-subject').value = '';
+      selectedPoints['edit'] = null;
+      document.getElementById('edit-points-wrap').style.display = 'none';
+      resetCal('edit', '変更しない場合は空欄');
+      await loadPlans();
+      renderSelectList('edit-list', 'edit');
+    } else {
+      showErr('edit-err', res.message || 'エラーが発生しました');
+    }
+  } catch(e) {
+    resetLoading(btn, '保存する');
+    showErr('edit-err', 'サーバーに接続できませんでした');
+  }
+}
+```
+- 基本的な流れは追加と同じですが、大きな違いは**入力・選択されている項目だけをサーバーに送る**点です。日付欄が空欄のままなら日付は送らない、科目欄が空欄のままなら科目は送らない、というように、「変更しなかった項目には触れない」形でデータを組み立てます（`if (d) body.date = d;`のように、値がある場合だけ`body`にプロパティを追加しています）。これは、サーバー側が「送られてきた項目だけを書き換える」という仕組みになっているためです。
 - 成功したら、選択状態や入力欄をすべてリセットし、一覧と選択リストの両方を最新の内容に更新します。
 
 ### 19.3 `submitDelete()`（922〜946行）— 予定を削除する
+```js
+async function submitDelete() {
+  const session = requireLoginOrRedirect();
+  if (!session) return;
+  if (!delTarget) return;
+  const btn = document.querySelector('#del-confirm .btn-danger');
+  setLoading(btn, '削除中…', true);
+  try {
+    const res = await api('/delete_schedule', {
+      method: 'POST', body: JSON.stringify({ guild_id: GUILD_ID, session_token: session.session_token, target: delTarget, nickname: session.nickname })
+    });
+    resetLoading(btn, '削除する');
+    if (res.ok) {
+      showOk('del-ok');
+      document.getElementById('del-confirm').style.display = 'none';
+      delTarget = null;
+      await loadPlans();
+      renderSelectList('del-list', 'delete');
+    } else {
+      showErr('del-err', res.message || 'エラーが発生しました');
+    }
+  } catch(e) {
+    resetLoading(btn, '削除する');
+    showErr('del-err', 'サーバーに接続できませんでした');
+  }
+}
+```
 - 削除対象が選ばれていなければ何もしません。選ばれていれば、確認済みという前提でそのままサーバーに削除をお願いします。
 - 成功したら、確認欄を隠し、選択状態をクリアし、一覧と選択リストを更新します。
 
@@ -686,23 +1120,38 @@ function resetLoading(btn, label) { btn.disabled = false; btn.textContent = labe
 - `resetLoading`：ボタンを元の押せる状態・元の文言に戻します。
 
 ```js
-function showOk(id) { /* 成功メッセージを表示して、3秒後に自動で消す */ }
-function showErr(id, msg) { /* エラーメッセージを表示して、4秒後に自動で消す（メッセージはエスケープ済み） */ }
+function showOk(id) {
+  const el = document.getElementById(id);
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 3000);
+}
+function showErr(id, msg) {
+  const el = document.getElementById(id);
+  el.innerHTML = Icons.html('close', {size:14}) + ' ' + esc(msg);
+  el.style.display = 'block';
+  setTimeout(() => el.style.display = 'none', 4000);
+}
 ```
 - `showErr`のメッセージも`esc()`を通しています。サーバーから返ってきたエラーメッセージであっても、念のためそのまま信用せずにエスケープしてから表示する、という慎重な作りです。
 
 ```js
 function getCatValue(prefix) {
   const sel = document.getElementById(prefix + '-category-sel');
-  if (sel.value === '__custom__') return document.getElementById(prefix + '-category-inp').value.trim();
+  if (sel.value === '__custom__') {
+    return document.getElementById(prefix + '-category-inp').value.trim();
+  }
   return sel.value;
 }
 function onCatSel(prefix) {
-  // 「自由入力…」が選ばれたらテキスト入力欄を表示、それ以外なら隠す
-  // カテゴリが変わるたびにポイント欄の表示も更新する
+  const sel = document.getElementById(prefix + '-category-sel');
+  const inp = document.getElementById(prefix + '-category-inp');
+  if (sel.value === '__custom__') { inp.style.display = 'block'; inp.focus(); }
+  else { inp.style.display = 'none'; }
+  updatePointsVisibility(prefix);
 }
 ```
 - `getCatValue`：カテゴリの選択欄で「自由入力…」が選ばれている場合はテキスト入力欄の値を、そうでなければ選択欄の値そのものを返す、共通の取り出し関数です。
+- `onCatSel`：「自由入力…」が選ばれたらテキスト入力欄を表示してフォーカスを当て、それ以外なら隠します。カテゴリが変わるたびに`updatePointsVisibility`も呼び、ポイント欄の表示・非表示を最新の状態に合わせます。
 
 ---
 
@@ -721,26 +1170,79 @@ function initCal(id, allowPast) {
 
 ```js
 function renderCal(id) {
-  // 今月の1日が何曜日か、今月が何日まであるかを計算し、
-  // 曜日の見出し・空白セル・日付セルを順番に組み立てて表示する
-  // 過去の日付・今日・選択中の日付には、それぞれ違う見た目のクラスを付ける
+  const s = calState[id]; if (!s) return;
+  const el = document.getElementById('cal-' + id); if (!el) return;
+  const now = new Date();
+  const todayStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}`;
+  const firstDay = new Date(s.year, s.month, 1).getDay();
+  const dim = new Date(s.year, s.month+1, 0).getDate();
+  const CAL_M = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'];
+
+  let html = `<div class="cal-head">
+    <button class="cal-nav-btn" onclick="moveCal(event,'${id}',-1)">‹</button>
+    <span>${s.year}年 ${CAL_M[s.month]}</span>
+    <button class="cal-nav-btn" onclick="moveCal(event,'${id}',1)">›</button>
+  </div><div class="cal-grid">`;
+  CAL_D.forEach(d => { html += `<div class="cal-dow">${d}</div>`; });
+  for (let i = 0; i < firstDay; i++) html += `<div class="cal-day emp"></div>`;
+  for (let d = 1; d <= dim; d++) {
+    const ds = `${s.year}-${String(s.month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const isPast = !s.allowPast && ds < todayStr;
+    let cls = 'cal-day';
+    if (isPast) cls += ' dis';
+    if (ds === todayStr && ds !== s.selected) cls += ' tod';
+    if (ds === s.selected) cls += ' sel';
+    const click = isPast ? '' : `onclick="pickDate(event,'${id}','${ds}')"`;
+    html += `<div class="${cls}" ${click}>${d}</div>`;
+  }
+  el.innerHTML = html + '</div>';
 }
 ```
-- 月の1日が何曜日かを調べることで、カレンダーの先頭にいくつ空白を入れればよいかが分かります。月の最終日は、「翌月の0日目」という少し変わった計算方法（JSではよく使われる書き方）で求めています。
-- 過去の日付でクリックできないようにしたいときは、その日のセルにはクリック用の命令自体を付けないことで実現しています。
+- 月の1日が何曜日かを調べることで（`new Date(s.year, s.month, 1).getDay()`）、カレンダーの先頭にいくつ空白を入れればよいかが分かります。月の最終日は、「翌月の0日目」（`new Date(s.year, s.month+1, 0)`）という少し変わった計算方法（JSではよく使われる書き方）で求めています。
+- 過去の日付でクリックできないようにしたいときは、その日のセルにはクリック用の命令（`onclick`）自体を付けないことで実現しています（`isPast`が真なら`click`が空文字になる）。今日・選択中の日付には、それぞれ違う見た目のクラス（`tod`/`sel`）を付けます。
 
 ```js
 function moveCal(e, id, dir) {
-  // 前月/翌月ボタン。月が0未満・12以上になったら年をまたいで繰り上げ・繰り下げる
+  e.stopPropagation();
+  const s = calState[id];
+  s.month += dir;
+  if (s.month < 0)  { s.month = 11; s.year--; }
+  if (s.month > 11) { s.month = 0;  s.year++; }
+  renderCal(id);
 }
 function pickDate(e, id, ds) {
-  // 日付をタップしたときの確定処理。選んだ日付を状態に保存し、表示を更新する
+  e.stopPropagation();
+  calState[id].selected = ds;
+  const [y, m, d] = ds.split('-');
+  const el = document.getElementById(id + '-date-text');
+  el.textContent = `${y}年${parseInt(m)}月${parseInt(d)}日`;
+  el.style.color = 'var(--text)';
+  document.getElementById('cal-' + id).classList.remove('open');
+  renderCal(id);
 }
 function toggleCal(e, id) {
-  // 日付欄をタップしてカレンダーを開閉する
-  // 開いたときにカレンダーが画面の下からはみ出していたら、少しスクロールして見えるようにする
+  e.stopPropagation();
+  const el = document.getElementById('cal-' + id);
+  const wasOpen = el.classList.contains('open');
+  document.querySelectorAll('.cal-pop').forEach(p => p.classList.remove('open'));
+  if (!wasOpen) {
+    el.classList.add('open');
+    setTimeout(() => {
+      const rect  = el.getBoundingClientRect();
+      const modal = el.closest('.modal');
+      if (modal && rect.bottom > window.innerHeight - 20) {
+        modal.scrollBy({ top: rect.bottom - window.innerHeight + 30, behavior: 'smooth' });
+      }
+    }, 30);
+  }
 }
+document.addEventListener('click', e => {
+  if (!e.target.closest('.date-wrap')) document.querySelectorAll('.cal-pop').forEach(p => p.classList.remove('open'));
+});
 ```
+- `moveCal`：前月/翌月ボタン。月が0未満・12以上になったら年をまたいで繰り上げ・繰り下げます。
+- `pickDate`：日付をタップしたときの確定処理。選んだ日付を状態（`calState[id].selected`）に保存し、表示テキストを更新してカレンダーを閉じます。
+- `toggleCal`：日付欄をタップしてカレンダーを開閉します。開いたときにカレンダーが画面の下からはみ出していたら、少しスクロールして見えるようにします（`getBoundingClientRect()`で今の位置を調べ、はみ出し分だけ`scrollBy`で滑らかにスクロール）。
 - 外側（`.date-wrap`の外）がクリックされたときは、開いているカレンダーをすべて閉じる処理も別途用意されています（2.5節と同じ「外側クリックで閉じる」パターン）。
 
 ---
@@ -824,26 +1326,48 @@ async function digestMessage(message) {
 async function checkScheduleUpdate() {
   try {
     const session = getLoginSession();
-    const res = await fetch(`${API_BASE}list_schedule?guild_id=${GUILD_ID}&scope=future`, { headers: /* ログイン情報 */ });
+    const res = await fetch(`${API_BASE}list_schedule?guild_id=${GUILD_ID}&scope=future`, {
+      headers: (session && session.session_token) ? { "Authorization": "Bearer " + session.session_token } : {},
+    });
     const txt = await res.text();
     const hash = await digestMessage(txt);
 
-    if (lastScheduleHash === null) { lastScheduleHash = hash; return; }
+    // 初回は保存だけ
+    if (lastScheduleHash === null) {
+      lastScheduleHash = hash;
+      return;
+    }
+
+    // ハッシュが変わっていなければ何もしない
     if (hash === lastScheduleHash) return;
     lastScheduleHash = hash;
 
-    // ここまで来た＝内容が本当に変わっていた、ということなので、
-    // 未来分だけ新しいデータに差し替え、過去分（読み込み済み）はそのまま維持して合体させる
+    // 未来分だけ差し替える（読み込み済みの過去分ページはそのまま維持する）
+    let data;
+    try { data = JSON.parse(txt); } catch(e) { return; }
+    if (!data.ok) return;
+    const today = todayLocalStr();
+    const pastLoaded = plans.filter(p => p.date < today);
+    plans = dedupePlans(data.plans.concat(pastLoaded));
+
+    // スクロール位置を保ったまま予定一覧を再描画
     const scrollY = window.scrollY;
     renderPlans();
     window.scrollTo(0, scrollY);
 
-    // 編集・削除ポップアップが開いていれば、そちらの一覧も最新化する
+    // 編集／削除モーダルが開いていれば、その選択リストも最新化
+    if (document.getElementById('modal-edit')?.classList.contains('open')) {
+      renderSelectList('edit-list', 'edit');
+    }
+    if (document.getElementById('modal-delete')?.classList.contains('open')) {
+      renderSelectList('del-list', 'delete');
+    }
   } catch(e) {}
 }
 ```
 - 「これからの予定」を毎回サーバーに問い合わせるのですが、その**返ってきた内容全体のハッシュ値**を前回のものと比較します。ハッシュ値が同じなら「中身は何も変わっていない」ということなので、そのあとの重い処理（データの読み取り・画面の再描画）を一切せずに終わります。これにより、変化が無いときの無駄な処理を減らしています。
-- 内容が変わっていたと分かったときだけ、実際にデータを読み取り直して画面を更新します。このとき、画面のスクロール位置を一度覚えておいて、更新が終わったら同じ位置に戻すことで、**見ていた場所がジャンプしてしまわないように**しています。
+- 内容が変わっていたと分かったときは、サーバーから届いた「これからの予定」（`data.plans`）と、この端末が既に読み込み済みの過去分（`plans`のうち今日より前の日付だけを`filter`で抜き出したもの）を`concat`で連結し、`dedupePlans`（4節）で重複を除いてから`plans`を丸ごと差し替えます。ページング（9節）で少しずつ読み込んだ過去分を無駄にせず、未来分だけを最新化する組み立て方です。
+- データを更新したら、画面のスクロール位置を一度覚えておいて、再描画が終わったら同じ位置に戻すことで、**見ていた場所がジャンプしてしまわないように**しています。
 - もし編集・削除のポップアップが開いている最中にこの更新が来た場合は、その中の選択リストも一緒に最新化します（古いデータのまま操作してしまう事故を防ぐため）。
 - 全体を「エラーが起きても止まらない」処理（`try/catch`）で囲んでいるので、通信エラーが1回起きても、この定期チェック自体は次回もちゃんと動き続けます。
 
