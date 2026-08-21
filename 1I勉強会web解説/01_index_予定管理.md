@@ -160,20 +160,104 @@ function requireLoginOrRedirect() {
 - ページを開いたときはログインできていても、その後時間が経ってセッションが切れている可能性があるため、実際に変更を送る直前にもう一度確認する二重チェックです。
 - ログイン中ならログイン情報をそのまま返し、呼び出し元はそれを使って以降の通信を組み立てます。ログインしていなければ`null`を返し、呼び出し元はそこで処理を中断します。
 
-### 2.5 ドロワー下部のアカウント表示（41〜117行）
+### 2.5 ドロワー下部のアカウント表示（39〜123行）
 `renderDrawerAccount()`は、ドロワーメニューの一番下にある「今ログインしている人」の表示を作る関数です。ここでは`innerHTML = "<div>...</div>"`のような文字列の組み立てではなく、`document.createElement`という**部品を1つずつJSで作って組み立てる方法**を使っています（あとで出てくるXSS対策と同じ理由です。ユーザーが入力した文字列を扱うときは、この作り方の方が安全）。
 
-- 42〜45行：表示先の部品（`#drawer-account`）を探す。無ければ何もしない。前回の中身と開閉状態をいったんリセット。
-- 46〜53行：ログイン情報（`session_token`と`nickname`）が両方揃っていなければ、「ログインしていません」というリンクだけを表示して終わり。
-- 56〜65行：ログイン中なら、丸いアバターの部品を作る。中身はニックネームの最初の2文字を大文字にしたもの。アカウントごとに割り当てられた色があれば、それを背景色・文字色として使う。
-- 67〜79行：ニックネームと（あれば）学籍番号を並べた部品を作る。
-- 81〜84行：開閉を示す矢印（`›`）を追加。
-- 86〜89行：このボタン全体をクリックすると、メニューの開閉状態が反転する。`e.stopPropagation()`は「このクリックを、後で説明する『外側クリックで閉じる』処理には伝えない」という命令（そうしないと、開いた直後に自分自身のクリックで即座に閉じてしまう）。
-- 91〜100行：ミニメニュー内の「⚙️ アカウント設定」リンク。実際の設定画面はこのページには無く、`/StudyLog.html?openAccount=1`という別ページのURLに飛ぶことで、勉強ログページ側に用意されている設定画面を開く仕組みになっている。
-- 102〜113行：「🚪 ログアウト」ボタン。押すと確認ダイアログ（`showAppConfirm`、自作のOKキャンセル確認画面）を出し、OKが押されたら`localStorage`からログイン情報を消してログインページに移動する。
-- 115〜116行：ここまで作った部品を画面に追加する。
-- 118〜121行：画面のどこかがクリックされるたびに、「そのクリックがこのアカウント表示欄の外側で起きたか」をチェックし、外側なら開いているミニメニューを閉じる（よくある「ポップアップの外をクリックしたら閉じる」という動き）。
-- 122行：ページが開いたタイミングで、この関数を1回実行する。
+```js
+// ★ 追加：ドロワー下部に「だれとしてログインしているか」を表示する（2026/08/19）
+//   StudyLog.jsのヘッダーアバターと同じ見た目（色付き丸アバター＋ニックネーム）。
+//   タップでミニメニュー（アカウント設定／ログアウト）を開閉する。
+function renderDrawerAccount() {
+  const el = document.getElementById('drawer-account');
+  if (!el) return;
+  el.innerHTML = '';
+  el.classList.remove('is-open');
+  const s = getLoginSession();
+  if (!(s && s.session_token && s.nickname)) {
+    const link = document.createElement('a');
+    link.className = 'drawer-account-login-link';
+    link.href = LOGIN_PATH;
+    link.textContent = 'ログインしていません';
+    el.appendChild(link);
+    return;
+  }
+
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'drawer-account-btn';
+
+  const avatar = document.createElement('span');
+  avatar.className = 'drawer-account-avatar';
+  avatar.textContent = s.nickname.slice(0, 2).toUpperCase();
+  if (s.color) avatar.style.background = s.color;
+  if (s.text_color) avatar.style.color = s.text_color;
+  btn.appendChild(avatar);
+
+  const names = document.createElement('span');
+  names.className = 'drawer-account-names';
+  const nameEl = document.createElement('span');
+  nameEl.className = 'drawer-account-name';
+  nameEl.textContent = s.nickname;
+  names.appendChild(nameEl);
+  if (s.student_id) {
+    const idEl = document.createElement('span');
+    idEl.className = 'drawer-account-id';
+    idEl.textContent = s.student_id;
+    names.appendChild(idEl);
+  }
+  btn.appendChild(names);
+
+  const chevron = document.createElement('span');
+  chevron.className = 'drawer-account-chevron';
+  chevron.textContent = '›';
+  btn.appendChild(chevron);
+
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    el.classList.toggle('is-open');
+  });
+
+  const menu = document.createElement('div');
+  menu.className = 'drawer-account-menu';
+
+  // ★ アカウント設定（Discord連携・パスワード変更）は勉強ログページに
+  //   実装があるので、そちらを開く（?openAccount=1 を見て自動でモーダルを開く）。
+  const settingsLink = document.createElement('a');
+  settingsLink.className = 'drawer-account-menu-item';
+  settingsLink.href = '/StudyLog.html?openAccount=1';
+  settingsLink.innerHTML = Icons.html('settings', {size:16}) + ' アカウント設定（Discord連携・パスワード変更）';
+  menu.appendChild(settingsLink);
+
+  const logoutBtn = document.createElement('button');
+  logoutBtn.type = 'button';
+  logoutBtn.className = 'drawer-account-menu-item is-danger';
+  logoutBtn.innerHTML = Icons.html('logout', {size:16}) + ' ログアウト';
+  logoutBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const ok = await showAppConfirm({ title: 'ログアウトしますか？', okLabel: 'ログアウト', danger: true });
+    if (!ok) return;
+    localStorage.removeItem(SESSION_KEY);
+    location.href = LOGIN_PATH;
+  });
+  menu.appendChild(logoutBtn);
+
+  el.appendChild(btn);
+  el.appendChild(menu);
+}
+document.addEventListener('click', (e) => {
+  const el = document.getElementById('drawer-account');
+  if (el && !el.contains(e.target)) el.classList.remove('is-open');
+});
+renderDrawerAccount();
+```
+- 冒頭でまず表示先の部品（`#drawer-account`）を探し、無ければ何もしません。前回の中身と開閉状態（`is-open`クラス）はいったんリセットします。
+- ログイン情報（`session_token`と`nickname`）が両方揃っていなければ、「ログインしていません」というリンクだけを表示して終わりです。
+- ログイン中なら、丸いアバターの部品を作ります。中身はニックネームの最初の2文字を大文字にしたもので、アカウントごとに割り当てられた色（`s.color`/`s.text_color`）があれば、それを背景色・文字色として使います。
+- ニックネームと（あれば）学籍番号を並べた部品、開閉を示す矢印（`›`）を続けて作ります。
+- ボタン全体をクリックすると、メニューの開閉状態が反転します。`e.stopPropagation()`は「このクリックを、後で説明する『外側クリックで閉じる』処理には伝えない」という命令です（そうしないと、開いた直後に自分自身のクリックで即座に閉じてしまいます）。
+- ミニメニューには「⚙️ アカウント設定」リンクがあります。実際の設定画面はこのページには無く、`/StudyLog.html?openAccount=1`という別ページのURLに飛ぶことで、勉強ログページ側に用意されている設定画面を開く仕組みになっています。
+- 「🚪 ログアウト」ボタンを押すと、確認ダイアログ（`showAppConfirm`、自作のOKキャンセル確認画面）を出し、OKが押されたら`localStorage`からログイン情報を消してログインページに移動します。
+- 最後に、画面のどこかがクリックされるたびに「そのクリックがこのアカウント表示欄の外側で起きたか」をチェックし、外側なら開いているミニメニューを閉じます（よくある「ポップアップの外をクリックしたら閉じる」という動きです）。ページが開いたタイミングでは、`renderDrawerAccount()`を1回実行して初期表示を作ります。
 
 ### 2.6 表示を安全にするための関数（124〜132行）
 ```js
