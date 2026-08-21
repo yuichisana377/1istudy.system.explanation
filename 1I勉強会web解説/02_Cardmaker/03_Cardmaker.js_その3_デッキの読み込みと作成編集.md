@@ -189,11 +189,61 @@ if (planPublish) { await announceNewDeckToServer(deck.id); }
 
 ### 5.3 空デッキをサーバーに先行登録：`announceNewDeckToServer(deckId)`（2025〜2079行）
 ```js
-const cards = deck.cards.map(cardToServerPayload);
-const res = await fetch(`${API_BASE}save_cards`, {
-  method: 'POST', ...,
-  body: JSON.stringify({ name: deck.name, cards, ..., silent: true, incomplete: true, choice_mode: deck.choiceMode || null }),
-});
+async function announceNewDeckToServer(deckId) {
+  const deck = decks.find(d => d.id === deckId);
+  if (!deck) return;
+  const session = getLoginSession();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    // ★ 修正：以前はここで常に cards: [] を送ってしまっていたため、
+    //   （例：デッキ名編集モーダルで「公開予定」を後からONにした場合など）
+    //   既にローカルで作成済みのカードが無視され、サーバー側は「0枚」として
+    //   登録されてしまっていた。その結果、次に編集画面を開いた際に強制的な
+    //   最新化（force reload）でローカルのカードがサーバー側の0枚で
+    //   上書きされて消えてしまう、という重大な不具合につながっていた。
+    //   ここでは必ず「今ローカルにある実際のカード」をそのまま送る
+    //   （まだ1枚も無ければ結果的に空配列になるだけで、これまで通り）。
+    const cards = deck.cards.map(cardToServerPayload);
+    const res = await fetch(`${API_BASE}save_cards`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: deck.name,
+        cards,
+        guild_id: GUILD_ID,
+        session_token: session ? session.session_token : undefined,
+        subject: deck.subject || null,
+        folder_id: deck.folderId || null,
+        publisher_id: session ? session.student_id : null,
+        publisher_nickname: session ? session.nickname : '匿名',
+        silent: true,      // ★ 作成しただけなのでDiscord通知はしない
+        incomplete: true,  // ★ まだ「保存して公開」を経ていないので「未完成（作成中）」扱いにする
+        choice_mode: deck.choiceMode || null, // ★ 多肢選択デッキかどうか
+      }),
+      signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '不明なエラー');
+    // ★ POST完了までの間に他の同期処理でdecks配列が入れ替わっている可能性があるため、
+    //   必ずこの時点で最新のdecksからidで探し直してから更新・保存する。
+    decks = loadDecks();
+    const target = decks.find(d => d.id === deckId);
+    if (target) {
+      target.filename = data.filename;
+      target.count = cards.length; // ★ 修正：実際に送ったカード数を反映する（常に0にしない）
+      target.cardsLoaded = true;
+      target.published_by = session ? session.nickname : '匿名';
+      target.incomplete = true;
+      target.notYetPublished = true; // ★ まだ「公開して保存」を経ていないので「作成中」のまま
+      saveDecks(decks);
+    }
+  } catch (e) {
+    // ★ サーバー登録に失敗した場合は、これまで通りこの端末だけの下書き
+    //   （filenameなし）として続行する。次にカードを保存して公開すれば
+    //   その時にサーバーへ反映される。
+  }
+}
 ```
 - 既存の`save_cards`というAPI（カード保存用）を、あえて「中身が空（または少数）の状態」で呼び出すことで、デッキそのものをサーバーに登録します。
 - `silent: true`：この時点ではDiscordへの通知はしません（作成しただけなので、まだ知らせるべき内容が無いため）。
