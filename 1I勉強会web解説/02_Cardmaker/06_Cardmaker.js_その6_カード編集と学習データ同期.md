@@ -332,6 +332,40 @@ async function waitForPendingSync(deckId) {
 - コメントに、なぜこの仕組みが必要かの理由が書かれています：カードを次々に追加・削除する場面（例：10問連続で作成）では、1回ごとの同期完了を律儀に待っていると操作のテンポが悪くなるので、待たずに次々進められるようにしたい。しかし、「作成済みリストから別のカードをタップして編集する」ときは、直前の追加分の同期がまだ完了していない状態で強制的にサーバーから読み込み直すと、その追加分がまだサーバーに存在しないまま古い内容で上書きされて消えてしまいます。
 - そこで、「同期処理は`queueSyncDeckToServer`を通して裏で順番に進めておく（普段は待たない）」「強制的にサーバーから読み込み直す直前にだけ`waitForPendingSync`でその完了を待ち合わせる」という2段構えにすることで、**操作のテンポの良さ**と**データが消えない安全性**を両立させています。これがCardMaker全体で繰り返し出てきた「まず`waitForPendingSync`、それから強制リロード」というパターンの正体です。
 
+```js
+async function syncDeckToServer(deck) {
+  try {
+    const cards = deck.cards.map(cardToServerPayload); // ★ choices/correct_indicesも含めて画像も同期する
+    const session = getLoginSession();
+    const res = await fetch(`${API_BASE}save_cards`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: deck.name,
+        cards,
+        filename: deck.filename,
+        guild_id: GUILD_ID,
+        session_token: session ? session.session_token : undefined,
+        subject: deck.subject || null,
+        folder_id: deck.folderId || null, // ★ フォルダ所属（みんなで共有）
+        publisher_id: session ? session.student_id : null,
+        publisher_nickname: deck.published_by || (session ? session.nickname : '匿名'),
+        silent: true, // ★ 通知しない
+        incomplete: !!deck.incomplete, // ★ 未完成フラグを維持したままサーバーへ反映する
+        choice_mode: deck.choiceMode || null, // ★ 多肢選択デッキかどうかを維持したまま反映する
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '不明なエラー');
+    deck.count = deck.cards.length;
+    saveDecks(decks);
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+```
 `syncDeckToServer(deck)`自体（3385〜3416行）は、実際にデッキの内容をサーバーの`save_cards`に送信する処理です。`silent: true`（通知なし）で送られるのがポイントで、カードを1枚編集するたびにDiscordへ通知が飛ぶと煩わしいため、通知が飛ぶのは「公開して保存」（[04_Cardmaker.js_その4_カード保存と公開.md](04_Cardmaker.js_その4_カード保存と公開.md)の`publishDeck`）のときだけに限定されています。
 
 ---
@@ -511,7 +545,16 @@ function saveStudyProgress() {
 - `loadStudyProgress`はこの逆で、保存されているデータが壊れていないか（配列が空でないか、`idx`が範囲内か）を確認してから返します。
 - `saveCompletionRecord`/`loadCompletionRecord`は、学習を最後まで終えたという記録（完了日時と問題数だけ）を、進捗とは別のキーで保存します。
 
-`renderStudyTitle()`（3653〜3663行）は学習画面のタイトルを安全に組み立てる関数です。コメントに「以前は絵文字を末尾に付け足す正規表現による文字列操作をしていたのをやめ、常にここから再描画する方式にした」とあります。デッキ名・フォルダ名（ユーザー入力）は`esc()`を通し、アイコン部分はこのファイル内の固定HTMLとして別に組み立てることで、安全性と表示の一貫性を両立させています。
+```js
+function renderStudyTitle() {
+  const prefixIcon = studyIsFolder ? Icons.cmHtml('folder', {size:16}) + ' ' : '';
+  const suffixIcons =
+    (studyReverse  ? ' ' + Icons.html('refresh', {size:14})  : '') +
+    (studyShuffled ? ' ' + Icons.html('shuffle', {size:14}) : '');
+  document.getElementById('study-title').innerHTML = prefixIcon + esc(studyBaseTitle) + suffixIcons;
+}
+```
+`renderStudyTitle()`（3673〜3679行）は学習画面のタイトルを安全に組み立てる関数です。コメントに「以前は絵文字を末尾に付け足す正規表現による文字列操作をしていたのをやめ、常にここから再描画する方式にした」とあります。デッキ名・フォルダ名（ユーザー入力）は`esc()`を通し、アイコン部分（フォルダアイコン、反転/シャッフル中のアイコン）はこのファイル内の固定HTMLとして別に組み立てることで、安全性と表示の一貫性を両立させています。
 
 ---
 
