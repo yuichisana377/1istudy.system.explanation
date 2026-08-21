@@ -47,28 +47,141 @@ function deckLoadTimeoutMs(expectedCount) {
 - 画像を多く含む大きなデッキだと通信に時間がかかるため、一律のタイムアウトだと「実際には成功していたのに時間切れで失敗扱いになる」ことがあったそうです。カードの枚数が多いほどタイムアウトを延ばし（1枚あたり150ミリ秒）、ただし青天井にはせず上限90秒で頭打ちにする、というバランスを取った調整です。
 
 ### 2.2 実際の取得：`fetchCardSetOnce`（1632〜1645行）
+```js
+async function fetchCardSetOnce(filename, timeoutMs = DECK_LOAD_BASE_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${API_BASE}get_card_set?filename=${encodeURIComponent(filename)}`, { signal: controller.signal, cache: 'no-store' });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '不明なエラー');
+    return data;
+  } catch (e) {
+    clearTimeout(timer);
+    throw e;
+  }
+}
+```
 1回分の通信を行うだけのシンプルな関数です。`AbortController`でタイムアウトを設定し、失敗したら`throw`（例外を投げる）で呼び出し元に伝えます。
 
-### 2.3 `ensureDeckCardsLoaded(deckId, force)`（1647〜1709行）
+### 2.3 `ensureDeckCardsLoaded(deckId, force)`（1647〜1708行）
 デッキを開く前に呼ばれる、カード本体を確実に用意するための中心的な関数です。
 
 ```js
-const knownCount = deck.cardsLoaded ? deck.cards.length : 0;
-const metaCount = typeof deck.count === 'number' ? deck.count : 0;
-const expectedCount = Math.max(knownCount, metaCount) || null;
-```
-- 「一覧のメタ情報で分かっている枚数」と「この端末に既にキャッシュされている枚数」の**大きい方**を「期待される枚数」とします。
+async function ensureDeckCardsLoaded(deckId, force = false) {
+  const deck = decks.find(d => d.id === deckId);
+  if (!deck) return { ok: false, reason: 'not_found' };
+  if (!deck.filename) { deck.cardsLoaded = true; return { ok: true }; }
+  if (deck.cardsLoaded && !force) return { ok: true };
 
-```js
-if (expectedCount !== null && expectedCount > 0 && fetchedCards.length < expectedCount) {
-  console.warn(`[cardmaker] get_card_set が${fetchedCards.length}件しか返しませんでしたが、${expectedCount}件のはずです。 filename=${deck.filename}`);
-  return { ok: false, reason: 'mismatch', expectedCount, fetchedCount: fetchedCards.length };
+  // ★ 直前まで一覧（list_cardsのメタ情報）で分かっていた問題数を控えておく。
+  //   これと比べて、実際に取得できたカード数が不自然に少なければ
+  //   「サーバーはok:trueを返したが、実は異常な状態だった」とみなして
+  //   失敗扱いにする（＝空データでdeck.cardsを上書きしない）ための安全策。
+  //   ★ 修正：deck.count（サーバー由来のメタ情報）だけでなく、この端末に
+  //     既に読み込み済みのカード実数（deck.cards.length）も比較対象に含める。
+  //     何らかの理由でサーバーへの同期がまだ済んでいない状態でも、
+  //     「今ローカルにある枚数より減っている」場合は同じく異常とみなし、
+  //     せっかく手元にあるカードを空／少ない件数で上書きしないようにする。
+  const knownCount = deck.cardsLoaded ? deck.cards.length : 0;
+  const metaCount = typeof deck.count === 'number' ? deck.count : 0;
+  const expectedCount = Math.max(knownCount, metaCount) || null;
+  // ★ カード枚数が多い（＝データ量が大きい）デッキほどタイムアウトを延ばす
+  const timeoutMs = deckLoadTimeoutMs(expectedCount);
+
+  loadingDeckIds.add(deckId);
+  if (document.querySelector('.screen.active')?.id === 'screen-list') renderDeckListUI();
+
+  try {
+    // ★ 修正：まず1回試し、タイムアウトも含むネットワークエラーの場合だけ、
+    //   間を置いて（500ms）もう一度だけ静かに自動再試行する。
+    //   これにより、一時的な遅延・瞬断だけでユーザーに失敗を見せてしまうことを防ぐ。
+    let data;
+    try {
+      data = await fetchCardSetOnce(deck.filename, timeoutMs);
+    } catch (firstErr) {
+      await new Promise(r => setTimeout(r, 500));
+      data = await fetchCardSetOnce(deck.filename, timeoutMs);
+    }
+    const fetchedCards = data.cards || [];
+
+    // ★ 安全策：サーバーが ok:true を返していても、直前まで分かっていた問題数
+    //   （または、この端末に既に読み込み済みだった実際の枚数）より
+    //   取得できたカード数が少ない場合は、通信は成功していても内容としては
+    //   信用できないので「失敗」として扱う。
+    //   これにより、編集画面が空／一部欠けた状態で開いてしまい、そのまま公開して
+    //   サーバー側（または手元）の本物のカードを少ないデータで上書きしてしまう事故を防ぐ。
+    if (expectedCount !== null && expectedCount > 0 && fetchedCards.length < expectedCount) {
+      console.warn(`[cardmaker] get_card_set が${fetchedCards.length}件しか返しませんでしたが、${expectedCount}件のはずです。 filename=${deck.filename}`);
+      return { ok: false, reason: 'mismatch', expectedCount, fetchedCount: fetchedCards.length };
+    }
+
+    deck.cards = fetchedCards;
+    deck.cardsLoaded = true;
+    deck.count = deck.cards.length;
+    // ★ カード本体取得時にもサーバー側の未完成フラグを取り込んでおく（念のため）
+    if ('incomplete' in data) deck.incomplete = !!data.incomplete;
+    saveDecks(decks);
+    return { ok: true };
+  } catch(e) {
+    return { ok: false, reason: 'network' };
+  } finally {
+    loadingDeckIds.delete(deckId);
+    if (document.querySelector('.screen.active')?.id === 'screen-list') renderDeckListUI();
+  }
 }
 ```
+- 「一覧のメタ情報で分かっている枚数」と「この端末に既にキャッシュされている枚数」の**大きい方**を「期待される枚数」とします。
 - サーバーが「成功」と答えても、実際に返ってきたカードの枚数が期待より少なければ、**通信としては成功していても内容は信用しない**という安全策です。コメントには「これが無いと、編集画面が空／一部欠けた状態で開いてしまい、そのまま公開すると本物のカードが少ないデータで上書きされて消えてしまう事故につながる」とあります。
-- 一時的な通信の遅延・瞬断に強くするため、1回目が失敗したら0.5秒待って**静かにもう一度だけ**自動で再試行してから、最終的な失敗として扱います（1671〜1681行）。
+- 一時的な通信の遅延・瞬断に強くするため、1回目が失敗したら0.5秒待って**静かにもう一度だけ**自動で再試行してから、最終的な失敗として扱います。
 
 ### 2.4 失敗したときの回復手段：`loadDeckCardsWithRecovery(deckId)`（1720〜1762行）
+```js
+async function loadDeckCardsWithRecovery(deckId) {
+  while (true) {
+    const result = await ensureDeckCardsLoaded(deckId, true);
+    if (result.ok) return true;
+
+    if (result.reason === 'mismatch') {
+      // ★ 判定前に最新のメタ情報を取り直す（ローカルの古いcountによる誤判定を防ぐ）
+      try { await fetchAndMergeDecks(); } catch(e) {}
+      const deck = decks.find(d => d.id === deckId);
+      if (!deck) return false;
+
+      // メタ情報を更新した結果、期待件数が0（＝本当に空が正解）になっていれば、
+      // ここで改めて通常読み込みすれば矛盾なく成功するはず
+      if (deck.count === 0) continue;
+
+      const choice = await showCmChoiceDialog({
+        title: '問題データの読み込みに不整合があります',
+        desc: `一覧では${result.expectedCount}問のはずですが、サーバーから0問しか取得できませんでした。\nこのまま開いて保存すると、サーバー側のデータが消える可能性があります。`,
+        choices: [
+          { icon: Icons.html('refresh', {size:20}), label: 'もう一度試す', sub: 'まずはこちらをおすすめします', value: 'retry' },
+          { icon: Icons.html('warning', {size:20}), label: '空のまま開く（上級者向け）', sub: '保存すると中身が消える可能性があります', value: 'force' },
+        ],
+        cancelLabel: 'やめる',
+      });
+      if (choice === 'retry') continue;
+      if (choice === 'force') {
+        const d = decks.find(x => x.id === deckId);
+        if (d) { d.cards = []; d.cardsLoaded = true; saveDecks(decks); }
+        return true;
+      }
+      return false; // やめる
+    }
+
+    // ネットワークエラー・その他の場合
+    const retry = await showCmConfirm({
+      title: '読み込みに失敗しました',
+      desc: '通信環境を確認してもう一度お試しください。',
+      okLabel: 'もう一度試す', cancelLabel: 'やめる',
+    });
+    if (!retry) return false;
+    // ループして再試行
+  }
+}
+```
 `while(true)`（条件が常に真＝明示的に`return`するまで繰り返すループ）を使い、失敗の種類ごとにユーザーに選択肢を提示します：
 - **`mismatch`（枚数不一致）**：まず最新のメタ情報を取り直し、それでも期待件数が0でなければ、`showCmChoiceDialog`で「もう一度試す」「空のまま開く（上級者向け）」の2択を提示。「空のまま開く」を選ぶと、あえて0件のまま`cardsLoaded=true`にして先に進めます（保存すると中身が消える可能性がある、という警告付き）。
 - **それ以外（ネットワークエラー等）**：「もう一度試す」か「やめる」かのシンプルな確認。
@@ -105,28 +218,136 @@ function preloadUnsureBadges() {
 ## 4. デッキメニュー（1793〜1960行）
 
 ### 4.1 メニューを開く（1793〜1828行）
-`openDeckMenu(id)`はメニューモーダルを開くだけのシンプルな関数（非公開デッキなら「非公開に戻す」の項目を隠す）。
+```js
+// ── デッキメニュー ─────────────────────
+function openDeckMenu(id) {
+  menuTargetId = id;
+  const deck = decks.find(d => d.id === id);
+  document.getElementById('menu-deck-name').textContent = deck.name;
+  document.getElementById('menu-unpublish-item').style.display = deck.filename ? '' : 'none';
+  // ★ 追加（2026/08/21）：クイズ過去問デッキは問題を編集できない
+  //   （フォルダ移動・デッキ名の変更・非公開に戻す・削除は引き続き可能）。
+  //   サーバー側（save_cards）でも強制しているが、そもそもメニューに
+  //   出さないことで迷わせない。
+  document.getElementById('menu-edit-item').style.display = deck.quizArchive ? 'none' : '';
+  document.getElementById('menu-quiz-archive-note').style.display = deck.quizArchive ? '' : 'none';
+  openModal('modal-deck-menu');
+}
+```
+`openDeckMenu(id)`はメニューモーダルを開くだけのシンプルな関数（非公開デッキなら「非公開に戻す」の項目を隠す）。**★ 追加（2026/08/21）**：デッキが`quizArchive`（クイズ過去問由来）であれば、「カードを編集する」メニュー項目（`menu-edit-item`）を隠し、代わりに「クイズ過去問デッキは問題を編集できません」という注意書き（`menu-quiz-archive-note`）を表示します。「デッキ名を変更する」「フォルダに移動する」「非公開に戻す」「デッキを削除する」の各項目は隠しません（引き続き操作できます）。サーバー側（`bot.py`の`save_cards`）でも同じ制限を独立に強制していますが、そもそも選べなくすることで生徒を迷わせない、という考え方です。
 
 ```js
-document.getElementById('menu-edit-item').style.display = deck.quizArchive ? 'none' : '';
-document.getElementById('menu-quiz-archive-note').style.display = deck.quizArchive ? '' : 'none';
+// ★ デッキ一覧から、そのデッキを元にした「みんなでクイズ」のホスト作成画面
+//   （Quiz.html）へ遷移する。
+function startQuizFromDeck(deckId) {
+  const deck = decks.find(d => d.id === deckId);
+  if (!deck || !deck.filename) {
+    showCmAlert({ title: 'クイズを始められません', desc: '公開済みのデッキだけ「みんなでクイズ」を始められます。先に公開してください。' });
+    return;
+  }
+  const url = `Quiz.html?mode=host&deck=${encodeURIComponent(deck.filename)}&name=${encodeURIComponent(deck.name)}`;
+  location.href = url;
+}
 ```
-- **★ 追加（2026/08/21）**：デッキが`quizArchive`（クイズ過去問由来）であれば、「カードを編集する」メニュー項目（`menu-edit-item`）を隠し、代わりに「クイズ過去問デッキは問題を編集できません」という注意書き（`menu-quiz-archive-note`）を表示します。「デッキ名を変更する」「フォルダに移動する」「非公開に戻す」「デッキを削除する」の各項目は隠しません（引き続き操作できます）。サーバー側（`bot.py`の`save_cards`）でも同じ制限を独立に強制していますが、そもそも選べなくすることで生徒を迷わせない、という考え方です。
-
 `startQuizFromDeck(deckId)`は、そのデッキを元に「みんなでクイズ」のホスト作成画面（`Quiz.html`）へ移動する関数です。公開済みデッキでなければ「先に公開してください」と案内します。
 
 ### 4.2 非公開に戻す：`menuUnpublish()`（1830〜1866行）
-サーバーの`/delete_cards`にリクエストを送り、成功したらこの端末側のデッキ情報から`filename`を消して「非公開」の状態に戻します。
-
 ```js
-if (data.error === 'creator_approval_required') {
-  openRequestDeleteModal('deck', deck.filename, deck.name, data.owner_nickname);
-  return;
+async function menuUnpublish() {
+  closeModal('modal-deck-menu');
+  const deck = decks.find(d => d.id === menuTargetId);
+  if (!deck || !deck.filename) return;
+  const ok = await showCmConfirm({
+    title: '非公開に戻しますか？',
+    desc: `「${deck.name}」をGitHubから削除して非公開に戻します。`,
+    okLabel: '非公開に戻す', okStyle: 'danger',
+  });
+  if (!ok) return;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${API_BASE}delete_cards`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ guild_id: GUILD_ID, session_token: getLoginSession()?.session_token, filename: deck.filename, nickname: getLoginSession()?.nickname }), signal: controller.signal,
+    });
+    clearTimeout(timer);
+    const data = await res.json();
+    if (!data.ok) {
+      // ★ 追加：作成者本人以外は直接削除できない（サーバー側の作成者確認機能）。
+      //   ローカルからは何も消さず、代わりに作成者への削除依頼フォームを開く。
+      if (data.error === 'creator_approval_required') {
+        openRequestDeleteModal('deck', deck.filename, deck.name, data.owner_nickname);
+        return;
+      }
+      throw new Error(data.error || '削除失敗');
+    }
+    deck.filename = null; deck.count = undefined; deck.published_by = null; deck.incomplete = false;
+    deck.planPublish = false; // ★ 追加：明示的に非公開へ戻した場合は「作成中」ではなく「非公開」表示にする
+    deck.notYetPublished = true; // ★ 追加：再度公開する場合は改めて「公開して保存」を経る必要がある状態に戻す
+    saveDecks(decks); renderDeckListUI();
+    showBanner('非公開に戻しました', '#f1f5f9', '#334155', Icons.cmHtml('unpublish', {size:15}));
+  } catch(e) {
+    await showCmAlert({ title: 'GitHubからの削除に失敗しました', desc: e.message });
+  }
 }
 ```
-- 作成者本人以外がこの操作をしようとすると、サーバー側がこのエラーを返し、その場合は削除するのではなく「作成者への削除依頼フォーム」（4.3節）を開きます。
+サーバーの`/delete_cards`にリクエストを送り、成功したらこの端末側のデッキ情報から`filename`を消して「非公開」の状態に戻します。作成者本人以外がこの操作をしようとすると、サーバー側が`creator_approval_required`エラーを返し、その場合は削除するのではなく「作成者への削除依頼フォーム」（4.3節）を開きます。
 
 ### 4.3 削除依頼フォーム（1868〜1919行）
+```js
+// ── 削除の確認依頼（作成者本人以外が削除／非公開に戻そうとしたとき） ──
+// サーバーが creator_approval_required を返したときに menuDelete()/
+// menuUnpublish() から呼ばれる。ここでは何も削除せず、理由を添えて
+// /request_delete を叩き、作成者にDiscordで確認してもらうだけ。
+let requestDeleteCtx = null; // { category, filename, targetName }
+
+function openRequestDeleteModal(category, filename, targetName, ownerNickname) {
+  requestDeleteCtx = { category, filename, targetName };
+  document.getElementById('request-delete-desc').textContent =
+    `「${targetName}」の作成者（${ownerNickname || '作成者'}さん）に削除の確認が必要です。理由を書いて送信すると、作成者にDiscordで確認が届きます。`;
+  document.getElementById('request-delete-reason').value = '';
+  document.getElementById('request-delete-err').style.display = 'none';
+  const btn = document.getElementById('request-delete-submit-btn');
+  btn.disabled = false; btn.textContent = '送信する';
+  openModal('modal-request-delete');
+}
+
+async function submitRequestDelete() {
+  if (!requestDeleteCtx) return;
+  const reason = document.getElementById('request-delete-reason').value.trim();
+  const errEl = document.getElementById('request-delete-err');
+  errEl.style.display = 'none';
+  if (!reason) {
+    errEl.textContent = '理由を入力してください';
+    errEl.style.display = '';
+    return;
+  }
+  const btn = document.getElementById('request-delete-submit-btn');
+  btn.disabled = true; btn.textContent = '送信中…';
+  try {
+    const session = getLoginSession();
+    const res = await fetch(`${API_BASE}request_delete`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        guild_id: GUILD_ID, session_token: session?.session_token,
+        category: requestDeleteCtx.category, filename: requestDeleteCtx.filename, reason,
+      }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || '送信に失敗しました');
+    closeModal('modal-request-delete');
+    const via = data.notified_via === 'web_pending'
+      ? '作成者がDiscord未連携のため、次回サイトを開いたときに確認されます。'
+      : '作成者にDiscordで確認を送りました。承認されると削除されます。';
+    showBanner(via, '#dcfce7', '#166534', Icons.html('mailSent', {size:15}));
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '送信する';
+    errEl.textContent = e.message;
+    errEl.style.display = '';
+  }
+}
+```
 `openRequestDeleteModal`／`submitRequestDelete`は、作成者本人でない人が削除・非公開化しようとしたときに、理由を書いて`/request_delete`に送信する処理です。成功すると、作成者にDiscordのDMで確認が届く（Discord連携が無い場合は「次回サイトを開いたときに確認される」という案内に変わる）旨のメッセージを表示します。
 
 ### 4.4 完全に削除する：`menuDelete()`（1921〜1960行）
@@ -174,7 +395,35 @@ async function menuDelete() {
 ## 5. 新しいデッキの作成（1963〜2079行）
 
 ### 5.1 新規作成画面を開く（1963〜1988行）
-`openNewSet()`は入力欄をリセットし（公開予定トグルは毎回デフォルトON、多肢選択トグルは毎回OFF）、`screen-new`を表示して科目一覧を読み込みます。
+```js
+// ── 新規作成 ──────────────────────────
+function openNewSet() {
+  document.getElementById('new-set-name').value = '';
+  document.getElementById('new-plan-publish').checked = true; // ★ 追加：毎回デフォルトで「公開予定」に戻す
+  // ★ 追加：多肢選択デッキのトグルも毎回OFFへ戻す
+  document.getElementById('new-choice-mode-enabled').checked = false;
+  showScreen('new');
+  loadSubjects();
+  setTimeout(() => document.getElementById('new-set-name').focus(), 200);
+}
+
+async function loadSubjects() {
+  const sel = document.getElementById('new-subject');
+  sel.innerHTML = '<option value="">読み込み中…</option>';
+  try {
+    // ★ cache: 'no-store' を追加：科目（チャンネル）一覧が古いまま
+    //   表示され続けることを防ぐため。
+    const res  = await fetch(`${API_BASE}channels?guild_id=${GUILD_ID}`, { cache: 'no-store' });
+    const data = await res.json();
+    if (!data.ok || !data.channels.length) throw new Error();
+    sel.innerHTML = '<option value="">科目を選択（任意）</option>' +
+      data.channels.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+  } catch(e) {
+    sel.innerHTML = '<option value="">（科目を取得できませんでした）</option>';
+  }
+}
+```
+`openNewSet()`は入力欄をリセットし（公開予定トグルは毎回デフォルトON、多肢選択トグルは毎回OFF）、`screen-new`を表示して`loadSubjects()`で科目一覧を読み込みます。
 
 ### 5.2 `startEdit()`（1989〜2017行）— 「作成 →」ボタン
 ```js
