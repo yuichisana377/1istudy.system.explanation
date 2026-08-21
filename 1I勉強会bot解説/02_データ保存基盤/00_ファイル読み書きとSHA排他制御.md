@@ -39,7 +39,10 @@ def local_get(filename):
     try:
         data = json.loads(raw.decode("utf-8")) if raw.strip() else None
     except (json.JSONDecodeError, UnicodeDecodeError) as e:
-        print(f"[ERROR] {path} の読み込みに失敗しました（...）: {e}")
+        # ★ ここで失敗を握りつぶすと「読み込まれない（原因不明）」に見えて
+        #   デバッグしづらいため、必ずログに出す。
+        print(f"[ERROR] {path} の読み込みに失敗しました（JSON形式が壊れているか、"
+              f"文字コードがUTF-8ではない可能性があります）: {e}")
         data = None
     return data, _file_sha(raw)
 ```
