@@ -238,6 +238,17 @@ document.addEventListener("keydown", e => {
 ```
 - 今**表示されているステップ**を`style.display !== "none"`という条件で見つけ出し、それが登録ステップなら、Enterキーで送信できるようにしています。フォームの`<form>`タグによる標準的なEnter送信ではなく、ページ全体のキーボードイベントを監視して、今どのステップを見ているかで振る舞いを変える、という実装です。
 
+```js
+function setBtn(el, disabled, label) {
+  if (!el) return;
+  el.disabled     = disabled;
+  el.innerHTML    = label;
+}
+
+function escHtml(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+}
+```
 `setBtn(el, disabled, label)`（267〜271行）と`escHtml(s)`（273〜275行）は、他ページで何度も見たパターンの小さなヘルパーです。
 
 ---
