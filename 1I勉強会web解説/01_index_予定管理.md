@@ -1395,4 +1395,6 @@ hideLoadingFallback();
 
 ---
 
+続きは[02_Cardmaker/00_HTML構造とページ全体像.md](02_Cardmaker/00_HTML構造とページ全体像.md)で、CardMakerページ（`Cardmaker.html`/`Cardmaker.js`）の全体像から解説します。
+
 

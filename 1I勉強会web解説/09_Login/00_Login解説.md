@@ -245,3 +245,7 @@ document.addEventListener("keydown", e => {
 ## まとめ
 
 `Login.js`は、他ページと比べて機能自体はシンプル（ログインボタンと初回登録フォームだけ）ですが、**別ドメイン間でのセッション情報の受け渡し**（URLクエリパラメータ経由）や、**登録と連携を1つのフォームで兼ねる**設計など、認証まわり特有の工夫が凝縮されたページでした。トークンの正当性チェックを自分では行わず、遷移先のページに委ねるという役割分担も、無駄な二重チェックを避けるための合理的な設計だと言えます。
+
+---
+
+続きは[../10_DeleteApproval/00_DeleteApproval解説.md](../10_DeleteApproval/00_DeleteApproval解説.md)で、削除承認ページ（`DeleteApproval.html`/`DeleteApproval.js`）を解説します。これで`bot.1istudy.web`の全ページの解説が完了します。
