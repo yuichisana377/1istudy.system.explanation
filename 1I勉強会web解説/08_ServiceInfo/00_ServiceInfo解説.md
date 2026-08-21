@@ -41,11 +41,18 @@ const res = await fetch(url, { cache: 'no-store', headers });
 
 ```js
 } catch (e) {
-  ...
+  listEl.innerHTML = '';
+  const li = document.createElement('li');
+  li.className = 'log-error';
+  // ★ 追加：制限付きアカウント（対象Discordサーバー未参加）でログイン中の場合は
+  //   サーバー側が意図的に拒否しているだけで、通信・サーバー側の障害ではない。
+  //   「読み込めませんでした」という技術的失敗の表現は誤解を招くため区別する。
   li.textContent = (e && e.code === 'guild_membership_required')
     ? 'このアカウントでは運用ログを閲覧できません（対象のDiscordサーバーに参加していないため）。'
     : 'ログを読み込めませんでした。';
   listEl.appendChild(li);
+} finally {
+  if (btn) btn.classList.remove('is-loading');
 }
 ```
 - コメントに「制限付きアカウント（対象Discordサーバー未参加）でログイン中の場合はサーバー側が意図的に拒否しているだけで、通信・サーバー側の障害ではない。『読み込めませんでした』という技術的失敗の表現は誤解を招くため区別する」とあります。エラーコード（`guild_membership_required`）を見て、「あなたのアカウントでは見られません」という**意図的な制限**であることを明確に伝え、単なる通信障害と誤解させないようにしています。
@@ -53,14 +60,20 @@ const res = await fetch(url, { cache: 'no-store', headers });
 ### 2.1 「もっと見る」の実装（196・379〜389行）
 ```js
 let logDisplayCount = 50; // ★「もっと見る」を押すたびに増やして再取得する（件数自体は多くないため単純な方式でよい）
-...
-if (data.entries.length >= logDisplayCount) {
-  const more = document.createElement('button');
-  more.className = 'log-load-more';
-  more.textContent = 'もっと見る';
-  more.onclick = () => { logDisplayCount += 50; loadSystemLog(); };
-  listEl.parentElement.appendChild(more);
-}
+```
+（`loadSystemLog()`冒頭近くのグローバル変数宣言です。）
+```js
+    // ★ 取得件数が要求件数と同じ＝まだ続きがあるかもしれない、という簡易判定
+    //   （サーバー側はoffsetに対応していないため、「もっと見る」は取得件数を
+    //   増やして丸ごと再取得する単純な方式にしている。件数上限が300件程度の
+    //   小規模運用なので、これで十分速い）。
+    if (data.entries.length >= logDisplayCount) {
+      const more = document.createElement('button');
+      more.className = 'log-load-more';
+      more.textContent = 'もっと見る';
+      more.onclick = () => { logDisplayCount += 50; loadSystemLog(); };
+      listEl.parentElement.appendChild(more);
+    }
 ```
 - [../01_index_予定管理.md](../01_index_予定管理.md)の`Plan.js`のようなオフセット方式のページングではなく、**「今何件表示したいか」という数を増やして、毎回0件目から丸ごと取り直す**、より単純な方式です。コメントに「サーバー側はoffsetに対応していないため」「件数上限が300件程度の小規模運用なので、これで十分速い」とあります。データ量がそれほど多くないことが分かっているからこそ選べる、割り切ったシンプルな実装です。
 
@@ -75,23 +88,85 @@ const hasDetail = detailFiles.length > 0;
 - コメントに「`entry.detail`は`[{file, diff}, ...]`形式（`bot.py`側の`file_diff()`が作る。`file`は実際のデータファイルのパス、`diff`はGitHubのコミットのような+/-形式のテキスト）」とあります。これは[サーバー側の`file_diff()`](../../1I勉強会bot解説/02_データ保存基盤/01_運用ログとdiff表示.md)がそのまま受け取って表示する部分です。
 
 ```js
-if (hasDetail) {
-  const chevron = document.createElement('span');
-  chevron.textContent = '▸';
-  summary.appendChild(chevron);
-}
-...
-if (hasDetail) {
-  const detail = document.createElement('div');
-  detailFiles.forEach(f => detail.appendChild(renderLogFileBlock(f)));
-  body.appendChild(detail);
-  li.classList.add('is-expandable');
-  li.tabIndex = 0;
-  li.setAttribute('role', 'button');
-  li.setAttribute('aria-expanded', 'false');
-  const toggle = () => { const open = li.classList.toggle('is-open'); li.setAttribute('aria-expanded', open ? 'true' : 'false'); };
-  li.addEventListener('click', toggle);
-  li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } });
+function renderLogEntry(entry) {
+  const li = document.createElement('li');
+  li.className = 'log-item' + (entry.level === 'error' ? ' is-error' : '');
+
+  const icon = document.createElement('span');
+  icon.className = 'log-item-icon';
+  icon.innerHTML = LOG_CATEGORY_ICON[entry.category] || Icons.html('tools', {size:15});
+
+  const body = document.createElement('div');
+  body.className = 'log-item-body';
+
+  // ★ entry.detail は [{file, diff}, ...] 形式（bot.py側のfile_diff()が作る。
+  //   fileは実際のデータファイルのパス、diffはGitHubのコミットのような
+  //   +/-形式のテキスト）。要約文の横に開閉矢印を出し、行全体をタップすると
+  //   詳細を展開できるようにする。detail が無いエントリはタップ不可のまま。
+  const detailFiles = Array.isArray(entry.detail) ? entry.detail.filter(f => f && f.diff) : [];
+  const hasDetail = detailFiles.length > 0;
+
+  const summary = document.createElement('div');
+  summary.className = 'log-item-summary';
+
+  const summaryText = document.createElement('span');
+  summaryText.className = 'log-item-summary-text';
+  summaryText.textContent = entry.summary || '';
+  summary.appendChild(summaryText);
+
+  if (hasDetail) {
+    const chevron = document.createElement('span');
+    chevron.className = 'log-item-chevron';
+    chevron.textContent = '▸';
+    summary.appendChild(chevron);
+  }
+
+  // ★ 追加：日時（左）と実行者（右下）を1行に並べる。実行者が無い場合
+  //   （バックアップ等サーバー主導の処理）は日時だけを表示する。
+  const footer = document.createElement('div');
+  footer.className = 'log-item-footer';
+
+  const time = document.createElement('span');
+  time.className = 'log-item-time';
+  time.textContent = (entry.time || '').replace('T', ' ');
+  footer.appendChild(time);
+
+  if (entry.actor) {
+    const actor = document.createElement('span');
+    actor.className = 'log-item-actor';
+    actor.textContent = entry.actor;
+    footer.appendChild(actor);
+  }
+
+  body.appendChild(summary);
+  body.appendChild(footer);
+
+  if (hasDetail) {
+    const detail = document.createElement('div');
+    detail.className = 'log-item-detail';
+    detailFiles.forEach(f => detail.appendChild(renderLogFileBlock(f)));
+    body.appendChild(detail);
+
+    li.classList.add('is-expandable');
+    li.tabIndex = 0;
+    li.setAttribute('role', 'button');
+    li.setAttribute('aria-expanded', 'false');
+    const toggle = () => {
+      const open = li.classList.toggle('is-open');
+      li.setAttribute('aria-expanded', open ? 'true' : 'false');
+    };
+    li.addEventListener('click', toggle);
+    li.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        toggle();
+      }
+    });
+  }
+
+  li.appendChild(icon);
+  li.appendChild(body);
+  return li;
 }
 ```
 - 詳細情報（`detail`）が無いエントリは、開閉矢印も付かず、タップしても何も起きません（`hasDetail`が`false`のときはこのブロック自体がスキップされます）。
@@ -102,35 +177,67 @@ if (hasDetail) {
 ## 4. ファイル単位の差分表示：`renderLogFileBlock(f)`（286〜341行）
 
 ```js
-if (f.file) {
-  wrap.classList.add('is-collapsed'); // ★ 既定は閉じた状態
-  ...
-  if (f.status === 'added' || f.status === 'deleted') {
-    const badge = document.createElement('span');
-    badge.className = 'log-item-file-badge is-' + (f.status === 'added' ? 'add' : 'del');
-    badge.textContent = f.status === 'added' ? '新規作成' : '削除';
-    header.appendChild(badge);
+function renderLogFileBlock(f) {
+  const wrap = document.createElement('div');
+  wrap.className = 'log-item-file';
+
+  if (f.file) {
+    wrap.classList.add('is-collapsed'); // ★ 既定は閉じた状態
+    const header = document.createElement('div');
+    header.className = 'log-item-file-header';
+
+    const chevron = document.createElement('span');
+    chevron.className = 'log-item-file-chevron';
+    chevron.textContent = '▾';
+    header.appendChild(chevron);
+
+    const name = document.createElement('span');
+    name.className = 'log-item-file-name';
+    name.textContent = f.file;
+    header.appendChild(name);
+
+    // ★ 追加：ファイル自体を新規作成/削除した場合はバッジを添える
+    //   （GitHubの「new file」「deleted」表示と同じ考え方）。既存ファイルの
+    //   中身を書き換えただけ（status: "modified"）の場合は何も付けない。
+    if (f.status === 'added' || f.status === 'deleted') {
+      const badge = document.createElement('span');
+      badge.className = 'log-item-file-badge is-' + (f.status === 'added' ? 'add' : 'del');
+      badge.textContent = f.status === 'added' ? '新規作成' : '削除';
+      header.appendChild(badge);
+    }
+
+    header.addEventListener('click', (e) => {
+      e.stopPropagation(); // ★ 親（ログ行全体の開閉）に伝播させない
+      wrap.classList.toggle('is-collapsed');
+    });
+    wrap.appendChild(header);
   }
-  header.addEventListener('click', (e) => {
-    e.stopPropagation(); // ★ 親（ログ行全体の開閉）に伝播させない
-    wrap.classList.toggle('is-collapsed');
-  });
-  wrap.appendChild(header);
-}
 ```
 - コメントに「GitHubのコミット画面の『変更されたファイル』表示と同じ考え方」とあります。1件のログイベントの中に複数のファイルの変更が含まれる場合（[cards_index.jsonも記録対象に含める](../../1I勉強会bot解説/02_データ保存基盤/01_運用ログとdiff表示.md)といった例）、ファイルごとに個別に折りたたみ・展開できるようにしています。
 - `e.stopPropagation()`が重要です。ファイル見出しをタップしたときのクリックが、そのまま親要素（ログ行全体の開閉、3節）にも伝わってしまうと、ファイル1つを開閉したつもりが行全体まで閉じてしまう、という意図しない動作になります。これを防ぐため、ファイル見出しのクリックはそこで止めています。
 - `f.file`が無い場合（コメントに「削除依頼の理由等、対象がファイル1つに対応しない場合」とあります）は、見出し自体を作らず、常に中身を表示したままにします。
 
 ```js
-const lines = document.createElement('div');
-String(f.diff).split('\n').forEach(line => {
-  const lineEl = document.createElement('div');
-  if (line.startsWith('+ ')) { lineEl.className = 'log-item-diff-line is-add'; lineEl.textContent = line.slice(2); }
-  else if (line.startsWith('- ')) { lineEl.className = 'log-item-diff-line is-del'; lineEl.textContent = line.slice(2); }
-  else { lineEl.className = 'log-item-diff-line'; lineEl.textContent = line; }
-  lines.appendChild(lineEl);
-});
+  const lines = document.createElement('div');
+  lines.className = 'log-item-file-lines';
+  String(f.diff).split('\n').forEach(line => {
+    const lineEl = document.createElement('div');
+    if (line.startsWith('+ ')) {
+      lineEl.className = 'log-item-diff-line is-add';
+      lineEl.textContent = line.slice(2);
+    } else if (line.startsWith('- ')) {
+      lineEl.className = 'log-item-diff-line is-del';
+      lineEl.textContent = line.slice(2);
+    } else {
+      lineEl.className = 'log-item-diff-line';
+      lineEl.textContent = line;
+    }
+    lines.appendChild(lineEl);
+  });
+  wrap.appendChild(lines);
+
+  return wrap;
+}
 ```
 - サーバーから送られてきた`diff`テキスト（改行区切りの、`+`/`-`から始まる行の並び）を1行ずつ分解し、`+`で始まる行は緑（追加）、`-`で始まる行は赤（削除）に色分けします。`line.slice(2)`で、色分けの目印として使った`"+ "`/`"- "`（記号＋半角スペース）自体は表示に含めず、実際の内容だけを表示します。
 
