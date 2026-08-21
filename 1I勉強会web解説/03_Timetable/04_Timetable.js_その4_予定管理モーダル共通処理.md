@@ -40,8 +40,23 @@ function renderChannelOptions() {
 
 ```js
 const body = { guild_id: GUILD_ID, date, subject, category, content: contentToSend };
-...
-const res = await api('/add_schedule', { method: 'POST', body: JSON.stringify(body) });
+
+if (POINT_CATEGORIES.includes(category)) {
+  const points = selectedPoints['add'];
+  if (!points) { showErr('add-err', 'ポイントを選択してください'); return; }
+  body.points = points;
+} else if (selectedPoints['add']) {
+  // ★ その他カテゴリは任意。選択されていれば送る
+  body.points = selectedPoints['add'];
+}
+
+const btn = document.querySelector('#modal-add .btn-primary');
+setLoading(btn, '登録中…');
+try {
+  const res = await api('/add_schedule', {
+    method: 'POST',
+    body: JSON.stringify(body)
+  });
 ```
 - `api()`関数自体はログイン中であれば自動で`Authorization`ヘッダーを付けてくれるため（[01_Timetable.js_その1_週表示と月間カレンダー.md](01_Timetable.js_その1_週表示と月間カレンダー.md)参照）、通信そのものはログイン中なら認証されます。ただし、`Plan.js`のような「未ログインなら送信前にログイン画面へ誘導する」という**事前の親切なガード**が無いため、未ログインのままこのフォームに入力して送信ボタンを押すと、サーバー側に拒否されてから初めて（`showErr`のエラー表示で）気づく形になります。これは`Plan.js`と挙動が異なる箇所で、実装上の統一が取れていない部分と考えられます。
 
@@ -53,7 +68,15 @@ const res = await api('/add_schedule', { method: 'POST', body: JSON.stringify(bo
 
 ```js
 function pickDate(e, id, ds) {
-  ...
+  e.stopPropagation();
+  calState[id].selected = ds;
+  const [y, m, d] = ds.split('-');
+  const el = document.getElementById(id + '-date-text');
+  el.textContent = `${y}年${parseInt(m)}月${parseInt(d)}日`;
+  el.style.color = 'var(--text)';
+  document.getElementById('cal-' + id).classList.remove('open');
+  renderCal(id);
+
   // ★ 曜日変更モードで日付を選んだら、入れ替えプレビューを更新
   //   （開始日・終了日どちらを変更してもプレビューは開始日ベースで再描画）
   if ((id === 'tt-edit' || id === 'tt-edit-end') && ttEditMode === 'day-change') {

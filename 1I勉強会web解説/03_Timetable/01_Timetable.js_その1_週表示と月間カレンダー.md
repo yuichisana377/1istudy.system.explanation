@@ -13,8 +13,34 @@
 ### 1.1 時間割の初期値：`DEFAULT_TIMETABLE`（130〜159行）
 ```js
 const DEFAULT_TIMETABLE = {
-  mon: [ { subject: "コンピュータリテラシ", items: ["教科書"] }, ... ],
-  ...
+  mon: [
+    { subject: "コンピュータリテラシ", items: ["教科書"] },
+    { subject: "情報技術概論",         items: ["教科書", "プリント"] },
+    { subject: "国語1乙a",             items: ["教科書", "資料集", "辞書"] },
+  ],
+  tue: [
+    { subject: "化学1a",     items: ["教科書", "ワーク"] },
+    { subject: "情報基礎",   items: ["教科書"] },
+    { subject: "線形数学1a", items: ["教科書", "ノート", "ワーク"] },
+    { subject: "地理a",      items: ["教科書", "資料集", "地図帳"] },
+  ],
+  wed: [
+    { subject: "物理1a",     items: ["教科書", "プリント"] },
+    { subject: "体育1a",     items: ["体操服", "教科書"] },
+    { subject: "英語会話a",  items: ["教科書", "多読手帳"] },
+    { subject: "その他",     items: [] },
+  ],
+  thu: [
+    { subject: "情報工学ゼミ1", items: [] },
+    { subject: "公共a",         items: ["教科書", "資料集", "プリント"] },
+    { subject: "基礎解析1a",    items: ["教科書", "ワーク", "ノート"] },
+    { subject: "国語1甲a",      items: ["教科書", "便覧", "漢字"] },
+  ],
+  fri: [
+    { subject: "英語表現基礎a",           items: ["教科書", "Vision Quest", "ワーク"] },
+    { subject: "基礎解析",                items: ["教科書", "ノート"] },
+    { subject: "英語コミュニケーション1a", items: ["教科書", "ワーク", "単語"] },
+  ],
 };
 ```
 - 曜日ごとに、時限順の「科目名」と「持ち物リスト」を並べた固定データです。コメントには「学期の時間割が未設定の期間に使うフォールバック用」とあります。前期・後期など学期ごとの時間割は、後述の`terms`（学期データ）で管理され、**どの学期にも当てはまらない期間だけ**、このデフォルト値が使われます。
@@ -201,14 +227,60 @@ ttHomeworks.filter(h => h.date === dateStr).forEach(h => pushItem(h.subject, h.c
 
 ### 6.2 カレンダーグリッドの組み立て：`buildMonthCalendarHtml()`（491〜544行）
 ```js
-const firstDow  = new Date(year, month, 1).getDay();
-const daysInMon = new Date(year, month + 1, 0).getDate();
-let cells = '';
-for (let i = 0; i < firstDow; i++) cells += `<div class="mc-day mc-empty"></div>`;
-for (let d = 1; d <= daysInMon; d++) { ... }
-const totalCells = firstDow + daysInMon;
-const trailing = (7 - (totalCells % 7)) % 7;
-for (let i = 0; i < trailing; i++) cells += `<div class="mc-day mc-empty"></div>`;
+function buildMonthCalendarHtml() {
+  const now   = new Date();
+  const base  = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
+  const year  = base.getFullYear();
+  const month = base.getMonth(); // 0-indexed
+  const todayStr  = getDateStr(now);
+  const firstDow  = new Date(year, month, 1).getDay(); // 0=日
+  const daysInMon = new Date(year, month + 1, 0).getDate();
+
+  let cells = '';
+  for (let i = 0; i < firstDow; i++) cells += `<div class="mc-day mc-empty"></div>`;
+
+  for (let d = 1; d <= daysInMon; d++) {
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    const dow     = new Date(year, month, d).getDay();
+    const holidayOv = ttOverrides[`holiday:${dateStr}`];
+    const hasItems  = getDatePlanItems(dateStr).length > 0;
+
+    let cls = 'mc-day';
+    if (dow === 0) cls += ' mc-sun-col';
+    if (dow === 6) cls += ' mc-sat-col';
+    if (dateStr === todayStr) cls += ' mc-today';
+    if (holidayOv) cls += ' mc-holiday';
+
+    const dotsHtml = (holidayOv || hasItems)
+      ? `<div class="mc-dots"><span class="mc-dot"></span></div>` : `<div class="mc-dots"></div>`;
+
+    cells += `<div class="${cls}" onclick="onMonthDayClick('${dateStr}')">
+      <span class="mc-num">${d}</span>
+      ${dotsHtml}
+    </div>`;
+  }
+
+  const totalCells = firstDow + daysInMon;
+  const trailing = (7 - (totalCells % 7)) % 7;
+  for (let i = 0; i < trailing; i++) cells += `<div class="mc-day mc-empty"></div>`;
+
+  return `<section class="month-cal-card">
+    <div class="month-cal-header">
+      <button class="month-nav-btn" onclick="moveMonth(-1)">‹</button>
+      <span class="month-cal-label">${year}年 ${month+1}月</span>
+      <button class="month-nav-btn" onclick="moveMonth(1)">›</button>
+      <button class="month-cal-today-btn" onclick="monthGoToday()">今月</button>
+    </div>
+    <div class="month-cal-dow">
+      <span class="mc-sun">日</span><span>月</span><span>火</span><span>水</span><span>木</span><span>金</span><span class="mc-sat">土</span>
+    </div>
+    <div class="month-cal-grid">${cells}</div>
+    <div class="month-cal-legend">
+      <span class="mcl-item"><span class="mcl-dot mcl-dot-plan"></span>予定あり</span>
+      <span class="mcl-item"><span class="mcl-dot mcl-dot-holiday"></span>終日休み</span>
+    </div>
+  </section>`;
+}
 ```
 - [../01_index_予定管理.md](../01_index_予定管理.md)の自作カレンダー（`renderCal`）と同じ考え方で、月初の空白セル・実際の日付セルを組み立てますが、こちらはさらに**月末の空白セル**（`trailing`）も計算して埋めています。`totalCells % 7`で「7で割った余り」を求め、`7 - 余り`（ただし余りが0ならそのまま0）で、グリッドをちょうど7の倍数マスにそろえるために必要な空白の数を計算しています。これにより、カレンダーの見た目が毎月きれいな長方形になります。
 - 各日付セルには、予定がある日・終日休みの日を示す小さな点（`mc-dots`）が付きます。
@@ -267,22 +339,48 @@ renderTimetable();
 
 ### 7.4 詳細から編集へ：`editFromTTDetail()`（734〜778行）
 ```js
-closeModal('tt-detail');
-openTTEditModal();
-calState['tt-edit'].selected = date;
-...
-renderCal('tt-edit');
-const periodEl = document.getElementById('tt-edit-period');
-if (periodEl) periodEl.value = String(period);
-const holidayOv = ttOverrides[`period_holiday:${date}:${period}`];
-const changeOv  = ttOverrides[`change:${date}:${period}`];
-if (holidayOv) {
-  switchTTMode('period-holiday');
-  document.getElementById('tt-edit-period-holiday-reason').value = holidayOv.reason || '休み';
-  ...
-} else {
-  switchTTMode('change');
-  ...
+function editFromTTDetail() {
+  if (!ttDetailTarget) return;
+  const { date, period } = ttDetailTarget;
+
+  closeModal('tt-detail');
+  openTTEditModal();
+
+  // 対象日付をセット
+  calState['tt-edit'].selected = date;
+  const [y, m, dd] = date.split('-');
+  const dateEl = document.getElementById('tt-edit-date-text');
+  dateEl.textContent = `${y}年${parseInt(m)}月${parseInt(dd)}日`;
+  dateEl.style.color = 'var(--text)';
+  renderCal('tt-edit');
+
+  // 時限をセット
+  const periodEl = document.getElementById('tt-edit-period');
+  if (periodEl) periodEl.value = String(period);
+
+  const holidayOv = ttOverrides[`period_holiday:${date}:${period}`];
+  const changeOv  = ttOverrides[`change:${date}:${period}`];
+
+  if (holidayOv) {
+    // すでに「1コマ休み」になっているコマ → 休みタブを開いて現在の内容を表示
+    switchTTMode('period-holiday');
+    document.getElementById('tt-edit-period-holiday-reason').value = holidayOv.reason || '休み';
+    document.getElementById('tt-edit-period-holiday-note').value   = holidayOv.note   || '';
+  } else {
+    // 授業変更タブを開いて、現在の内容（変更済みならその内容、なければ通常の時間割）を初期値にする
+    switchTTMode('change');
+    const dayKey = dateToDayKey(date);
+    const base   = (getTimetableForDate(date)[dayKey] || [])[period - 1];
+
+    const subject = changeOv ? (changeOv.subject || (base && base.subject)) : (base && base.subject);
+    const items   = changeOv ? (changeOv.items || [])                      : ((base && base.items) || []);
+    const note    = changeOv ? (changeOv.note || '')                       : '';
+
+    const subjEl = document.getElementById('tt-edit-subject');
+    if (subjEl) subjEl.value = subject || '';
+    document.getElementById('tt-edit-items').value = items.join(',');
+    document.getElementById('tt-edit-note').value  = note;
+  }
 }
 ```
 - 詳細モーダルの「この時間割を変更する」ボタンから、時間割編集モーダルを開き、タップしていたコマの日付・時限・（既存の変更があれば）その内容をあらかじめ入力欄に反映しておく、「詳細→編集へのつなぎ役」です。[../01_index_予定管理.md](../01_index_予定管理.md)の`editFromDetail()`と同じ役割のパターンです。
