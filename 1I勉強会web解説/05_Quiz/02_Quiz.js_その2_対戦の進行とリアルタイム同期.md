@@ -85,15 +85,26 @@ function renderCountdown(room) {
 function renderLobby(room) {
   const screenId = isHost ? 'host-lobby' : 'player-lobby';
   showScreenQ(screenId);
-  ...
+  const titleEl = document.getElementById(isHost ? 'hl-title' : 'pl-title');
+  titleEl.textContent = room.title;
+
   if (isHost) {
     document.getElementById('hl-count').textContent = `参加者 ${room.players.length}人`;
     document.getElementById('hl-players').innerHTML = playerChipsHtml(room.players);
     document.getElementById('hl-start-btn').disabled = room.players.length === 0;
   } else {
     document.getElementById('pl-status').textContent = `${room.host_nickname} さんが開始するのを待っています…（参加者 ${room.players.length}人）`;
-    ...
+    document.getElementById('pl-players').innerHTML = playerChipsHtml(room.players);
   }
+}
+
+function playerChipsHtml(players) {
+  if (!players.length) return `<p style="color:var(--text-dim);font-size:13px;">まだ誰も参加していません</p>`;
+  return players.map(p => `
+    <div class="qz-player-chip">
+      <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
+      ${escapeHtml(p.nickname)}
+    </div>`).join('');
 }
 ```
 - ホストと参加者で表示先の画面ID自体を切り替えつつ、参加者が0人ならホストの「クイズを始める」ボタンを押せなくします。
@@ -146,45 +157,77 @@ if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dat
 
 ### 3.4 正解・不正解のフィードバック（745〜769行）
 ```js
-if (revealed && yourAnswer !== undefined) {
-  feedbackEl.style.display = '';
-  if (room.your_correct) {
-    const bonus = room.first_correct_nickname === STUDENT.nickname;
-    feedbackEl.innerHTML = bonus ? '...一番乗りボーナスで +12点！' : '...正解！ +10点';
+  const feedbackEl = document.getElementById(feedbackId);
+  const waitingNote = document.getElementById(waitingNoteId);
+  if (revealed && yourAnswer !== undefined) {
+    feedbackEl.style.display = '';
+    if (room.your_correct) {
+      const bonus = room.first_correct_nickname === STUDENT.nickname;
+      feedbackEl.className = 'qz-answer-feedback ok';
+      feedbackEl.innerHTML = bonus ? (Icons.html('celebrate', {size:15}) + ' 正解！一番乗りボーナスで +12点！') : (Icons.html('checkCircle', {size:15}) + ' 正解！ +10点');
+    } else {
+      feedbackEl.className = 'qz-answer-feedback ng';
+      feedbackEl.innerHTML = Icons.html('wrong', {size:15}) + ' 不正解…';
+    }
+    waitingNote.style.display = 'none';
+  } else if (revealed && yourAnswer === undefined) {
+    feedbackEl.style.display = '';
+    feedbackEl.className = 'qz-answer-feedback ng';
+    feedbackEl.innerHTML = Icons.html('timer', {size:15}) + ' 時間切れで未回答でした';
+    waitingNote.style.display = 'none';
+  } else if (answered) {
+    feedbackEl.style.display = 'none';
+    waitingNote.style.display = '';
   } else {
-    feedbackEl.innerHTML = '...不正解…';
+    feedbackEl.style.display = 'none';
+    waitingNote.style.display = 'none';
   }
-} else if (revealed && yourAnswer === undefined) {
-  feedbackEl.innerHTML = '...時間切れで未回答でした';
-} else if (answered) {
-  waitingNote.style.display = '';
-} else { ... }
 ```
 - 「正解した（かつ一番乗りだった）」「正解した（一番乗りではない）」「不正解」「時間切れで未回答」「回答済みで発表待ち」「未回答」という、いくつものパターンを網羅的に出し分けています。正解の基本点は10点、一番乗りボーナスは+2点（合計12点）と、HTMLのヒーロー文言（`正解10点、一番早く正解すると+2点`）と一致する数値がここに実装されています。
 
 ### 3.5 正解発表パネル（774〜785行）
 ```js
-const revealPanel = document.getElementById(revealPanelId);
-if (room.state === 'reveal') {
-  revealPanel.style.display = '';
-  document.getElementById(firstBadgeId).textContent = room.first_correct_nickname
-    ? `...一番早く正解：${room.first_correct_nickname} さん（+2点ボーナス）`
-    : '...正解者はいませんでした';
-  document.getElementById(leaderboardId).innerHTML = miniLeaderboardHtml(room.players);
-} else {
-  revealPanel.style.display = 'none';
+  // ★ 修正：以前はホスト画面（hp-reveal）だけに「一番早く正解した人」と
+  //   ミニ順位表を表示していた。参加者にはホストと同じ情報を見せていなかった
+  //   ため、ホスト・参加者共通のこの関数から両方の画面を描画するようにする。
+  const revealPanel = document.getElementById(revealPanelId);
+  if (room.state === 'reveal') {
+    revealPanel.style.display = '';
+    document.getElementById(firstBadgeId).textContent = room.first_correct_nickname
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M13 3 4 14h6l-1 7 9-11h-6Z"/></svg> 一番早く正解：${room.first_correct_nickname} さん（+2点ボーナス）`
+      : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M13 3 4 14h6l-1 7 9-11h-6Z"/></svg> 正解者はいませんでした';
+    document.getElementById(leaderboardId).innerHTML = miniLeaderboardHtml(room.players);
+  } else {
+    revealPanel.style.display = 'none';
+  }
+
+  updateTimerBarFor(room, timerbarId);
 }
 ```
+※ `document.getElementById(firstBadgeId).textContent = ...`という代入は、実際のソースコードでもこの通り`textContent`（`innerHTML`ではない）になっています。値の中身にSVGタグの文字列が含まれていますが、`textContent`への代入なのでタグはそのまま文字として表示されてしまいます（実装上の細かな不整合であり、このドキュメントではソースコードをそのまま転記しています）。
 - コメントに「以前はホスト画面だけに『一番早く正解した人』とミニ順位表を表示していた。参加者にはホストと同じ情報を見せていなかったため、ホスト・参加者共通のこの関数から両方の画面を描画するようにする」という改善の経緯があります。
 
 ```js
+// ★ 修正：正解発表(reveal)中は、サーバーが players に answered/correct を
+//   含めて返すようになったので、その問題への各参加者の◯×も一緒に表示する。
+//   （出題中は correct フィールド自体が来ないので、その場合は何も表示しない）
 function miniLeaderboardHtml(players) {
-  return players.slice(0, 5).map((p, i) => `... ${quizMarkHtml(p)} ...`).join('');
+  return players.slice(0, 5).map((p, i) => `
+    <div class="qz-lb-row">
+      <span class="qz-lb-rank">${i + 1}</span>
+      <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
+      <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
+      ${quizMarkHtml(p)}
+      <span class="qz-lb-score">${p.score}点</span>
+    </div>`).join('');
 }
+
 function quizMarkHtml(p) {
-  if (typeof p.correct === 'undefined') return '';
+  if (typeof p.correct === 'undefined') return ''; // 出題中など、正誤情報が無い場合は何も出さない
   if (!p.answered) return `<span class="qz-lb-mark unanswered" title="未回答">―</span>`;
-  return p.correct ? `<span class="qz-lb-mark correct" title="正解">◯</span>` : `<span class="qz-lb-mark wrong" title="不正解">...</span>`;
+  return p.correct
+    ? `<span class="qz-lb-mark correct" title="正解">◯</span>`
+    : `<span class="qz-lb-mark wrong" title="不正解"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#dc2626" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M6 6l12 12"/><path d="M18 6L6 18"/></svg></span>`;
 }
 ```
 - 上位5人だけに絞ったミニ順位表を、各参加者の◯×付きで表示します。コメントに「正解発表(reveal)中は、サーバーが`players`に`answered`/`correct`を含めて返すようになった」とあり、出題中はこの情報自体が送られてこないため、`quizMarkHtml`はその場合何も表示しません（`p.correct`が`undefined`かどうかで判定）。
@@ -224,13 +267,19 @@ function tickQuizClocks() {
 - [00_HTML構造とその1_起動と参加画面.md](00_HTML構造とその1_起動と参加画面.md)で見た`quizClockOffsetMs`（時計のズレ補正）を使って、「サーバー時計での今の時刻」を計算し、そこから残り時間の割合を求めて、`scaleX(...)`（CSSの拡大縮小変形）でタイマーバーの幅を表現しています。200ミリ秒ごとにこの計算をやり直すことで、通信なしに滑らかにバーが減っていく演出を実現しています。
 
 ```js
-let lastCountdownShown = null;
+let lastCountdownShown = null; // ★ 追加：直前に表示した数字（変わった時だけポップ演出を出し直すため）
 function tickCountdownNum(serverNow) {
-  ...
+  const el = document.getElementById('cd-num');
+  if (!el || !el.dataset.startedAt || !el.dataset.limit) return;
+  const started = Number(el.dataset.startedAt) * 1000;
+  const limit = Number(el.dataset.limit) * 1000;
   const remainSec = Math.max(1, Math.ceil((limit - (serverNow - started)) / 1000));
   if (remainSec !== lastCountdownShown) {
     lastCountdownShown = remainSec;
     el.textContent = String(remainSec);
+    // ★ 数字が変わるたびに qzCountPop アニメーションを最初から再生させる
+    //   （同じアニメーション名を付け直すだけではブラウザが「変化なし」と
+    //   判断して再生してくれないため、一度 none にしてから戻すテクニックを使う）。
     el.style.animation = 'none';
     void el.offsetWidth; // 強制リフローでスタイルの変更を確定させる
     el.style.animation = '';
@@ -247,12 +296,14 @@ function tickCountdownNum(serverNow) {
 async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId = 'pp-waiting-note') {
   if (hasAnsweredThisQ) return;
   hasAnsweredThisQ = true;
+  const choicesEl = document.getElementById(choicesId);
   [...choicesEl.children].forEach((btn, i) => {
     const picked = i === choiceIndex;
     btn.disabled = true;
     btn.classList.toggle('qz-picked', picked);
     btn.classList.toggle('qz-dim', !picked);
   });
+  const waitingNote = document.getElementById(waitingNoteId);
   if (waitingNote) waitingNote.style.display = '';
   await apiPost('quiz_answer', withAuth({ code: roomCode, choice_index: choiceIndex }));
   pollOnce();
