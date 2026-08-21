@@ -82,11 +82,38 @@ function mathToPlainText(raw) {
 
 ```js
 const MATH_PAD_HTML = (function(){
-  const supKeys = ['⁰','¹','²','³',...];
-  const subKeys = ['₀','₁','₂','₃',...];
+  const supKeys = ['⁰','¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹','⁺','⁻','⁽','⁾','ⁿ'];
+  const subKeys = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉','₊','₋','₍','₎'];
   const symKeys = ['±','∓','×','÷','≤','≥','≠','≈','∞','π','θ','°','∑','∫'];
   const keyBtn = c => `<button type="button" class="math-key" data-ch="${c}">${c}</button>`;
-  return `...パレット全体のHTML...`;
+  return `
+    <div class="math-pad-header">
+      <span class="math-pad-title">${Icons.cmHtml('tally', {size:15})} 理数モード</span>
+      <button type="button" class="math-pad-close" onclick="toggleMathPad(this.closest('.math-pad').id)" aria-label="閉じる">${Icons.html('close', {size:16})}</button>
+    </div>
+    <div class="math-pad-body">
+      <div class="math-preview-label">プレビュー</div>
+      <div class="math-preview"></div>
+      <div class="math-row math-row-struct">
+        <span class="math-row-label">分数・ルート（教科書と同じ見た目で表示されます）</span>
+        <button type="button" class="math-key math-key-wide" data-action="frac">分数<span class="math-key-hint">(a)/(b)</span></button>
+        <button type="button" class="math-key" data-action="sqrt">√</button>
+        <button type="button" class="math-key" data-action="cbrt">∛</button>
+      </div>
+      <div class="math-row math-row-sup">
+        <span class="math-row-label">上付き文字（乗数など）</span>
+        ${supKeys.map(keyBtn).join('')}
+      </div>
+      <div class="math-row math-row-sub">
+        <span class="math-row-label">下付き文字（添字など）</span>
+        ${subKeys.map(keyBtn).join('')}
+      </div>
+      <div class="math-row math-row-sym">
+        <span class="math-row-label">記号</span>
+        ${symKeys.map(keyBtn).join('')}
+      </div>
+      <div class="math-pad-tip">${Icons.html('hint', {size:16})} 分数・ルートは、数字や文字を選択してからボタンを押すとその部分が中に入ります。</div>
+    </div>`;
 })();
 ```
 - 「理数記号」ボタンを押すと開くパレットのHTML全体を、即時実行関数で1回だけ組み立てて`MATH_PAD_HTML`という定数に入れておきます。ボタン類はすべて固定の記号なので`esc()`は不要（ユーザー入力を扱っていない）です。
@@ -112,14 +139,22 @@ function initMathPads() {
 - 各パレットの「プレビュー」欄が、対応する入力欄の`input`イベント（何か入力されるたび）に合わせて自動更新されるよう、リスナーを登録します。
 
 ```js
+// ★ 追加：問題文・解答などの入力欄（ta-q / modal-edit-q など）そのものの直下に、
+//   \(\sqrt{}\) のような生のLaTeX記法ではなく「√()」のような読みやすい簡易表示を
+//   常時プレビューする。理数記号パレットをわざわざ開かなくても、入力欄を
+//   見ただけでどんな数式になっているかがひと目でわかるようにするため。
+//   （教科書と同じ本格的な見た目のプレビューは、既存の理数モードパレット内の
+//   プレビューが担当するので、ここでは崩れない軽量なテキスト表示にとどめる）
 function attachInlineSimplePreview(target) {
   if (!target || target.dataset.simplePreviewAttached) return;
   target.dataset.simplePreviewAttached = '1';
   const preview = document.createElement('div');
-  ...
+  preview.className = 'math-inline-simple-preview';
+  preview.style.cssText = 'margin-top:4px;padding:2px 0;font-size:13px;color:var(--text-secondary,#888);white-space:pre-wrap;word-break:break-word;';
   target.insertAdjacentElement('afterend', preview);
   const update = () => {
     const plain = mathToPlainText(target.value);
+    // 数式記法を含んでいない（＝普通の文章のまま）場合は、二重表示を避けるため何も出さない
     preview.textContent = plain === target.value ? '' : plain;
   };
   target.addEventListener('input', update);
@@ -129,9 +164,50 @@ function attachInlineSimplePreview(target) {
 - 理数パレットを開かなくても、入力欄のすぐ下に「今の入力内容がどんな数式になるか」の軽量なプレビューを常時表示する機能です。`mathToPlainText`で変換した結果が、変換前の元の文字列と**同じ**なら（＝数式記法を含んでいない、ただの普通の文章なら）、プレビューは空欄のままにします（同じ内容を二重に表示しないための工夫）。
 
 ```js
-function mathInsertChar(el, ch) { ... }
-function mathInsertWrap(el, openStr, closeStr) { ... }
-function mathInsertFraction(el) { ... }
+// 単純な1文字挿入（選択範囲があればそこを置き換える＝ふつうの文字入力と同じ挙動）
+function mathInsertChar(el, ch) {
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end   = el.selectionEnd   != null ? el.selectionEnd   : el.value.length;
+  el.value = el.value.slice(0, start) + ch + el.value.slice(end);
+  const pos = start + ch.length;
+  el.focus();
+  el.setSelectionRange(pos, pos);
+  autoResize(el);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// 「囲み挿入」。選択範囲があればそれを openStr/closeStr で囲み、無ければ間にカーソルを置く。
+// √・∛はこれ一本で、それぞれ \( \) ごと自己完結した数式として挿入される。
+function mathInsertWrap(el, openStr, closeStr) {
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end   = el.selectionEnd   != null ? el.selectionEnd   : el.value.length;
+  const sel = el.value.slice(start, end);
+  el.value = el.value.slice(0, start) + openStr + sel + closeStr + el.value.slice(end);
+  const pos = sel ? (start + openStr.length + sel.length + closeStr.length) : (start + openStr.length);
+  el.focus();
+  el.setSelectionRange(pos, pos);
+  autoResize(el);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+// 分数専用：選択範囲を分子にして (分子)/(分母) という読みやすい記法を作る。
+// 選択があれば分母側にカーソルを、無ければ分子側にカーソルを置く。
+function mathInsertFraction(el) {
+  const start = el.selectionStart != null ? el.selectionStart : el.value.length;
+  const end   = el.selectionEnd   != null ? el.selectionEnd   : el.value.length;
+  const sel = el.value.slice(start, end);
+  const prefix = '(';
+  const middle = `${sel})/(`;
+  const suffix = ')';
+  el.value = el.value.slice(0, start) + prefix + middle + suffix + el.value.slice(end);
+  const numPos = start + prefix.length;
+  const denPos = start + prefix.length + middle.length;
+  const pos = sel ? denPos : numPos;
+  el.focus();
+  el.setSelectionRange(pos, pos);
+  autoResize(el);
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+}
 ```
 - パレットのボタンを押したときに、実際に入力欄へ文字を挿入する3種類の関数です。すべて「選択範囲があればそこを対象にする、無ければカーソル位置に挿入する」という、テキストエディタの一般的な挙動を再現しています。`el.selectionStart`/`el.selectionEnd`で今選択されている範囲を取得し、その前後の文字列と挿入したい文字列をつなげて新しい`value`を組み立てます。
 - `mathInsertFraction`だけ少し特殊で、選択していた文字列をそのまま分子にして`(選択部分)/(`という形にし、カーソルを分母の位置（選択が無ければ分子の位置）に移動させます。分数を作るときに「選択してからボタンを押すと、選択した内容がそのまま分子になる」という使い勝手を実現しています。
@@ -213,11 +289,43 @@ startRealtimeUpdates();
 `checkCardsUpdate()`／`checkFoldersUpdate()`／`checkOrderUpdate()`は、[01_index_予定管理.md](../01_index_予定管理.md)の`checkScheduleUpdate()`と同じ考え方（SHA-256ハッシュを前回と比較し、変わっていなければ何もしない）を、それぞれ`list_cards`（デッキのメタ情報）・`list_folders`（フォルダ一覧）・`list_order`（並び順）に対して行います。
 
 ```js
+// 公開デッキJSONの変更チェック
+// ★ 変更点：location.reload() をやめ、画面を邪魔しない更新に変更。
+//   ・一覧画面を見ている時だけ、その場で表示を更新
+//   ・編集中／プレイ中の画面はそのままにして、リロードもしない
+//     （データはバックグラウンドで decks / localStorage に反映されるので、
+//       次に一覧へ戻った時には最新の状態になっている）
+//   ・list_cards は軽量メタ情報のみなので、このポーリング自体も軽くなった。
 async function checkCardsUpdate() {
-  ...
-  await fetchAndMergeDecks();
-  const activeScreen = document.querySelector('.screen.active')?.id;
-  if (activeScreen === 'screen-list') { renderDeckListUI(); }
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    // ★ cache: 'no-store' を追加：これが無いと、ハッシュ比較のための取得自体が
+    //   キャッシュされたレスポンスを見てしまい、更新検知が機能しないことがあるため。
+    const res = await fetch(`${API_BASE}list_cards`, { signal: controller.signal, cache: 'no-store' });
+    clearTimeout(timer);
+    const txt = await res.text();
+    const hash = await digestMessage(txt);
+
+    // 初回は保存だけ
+    if (lastCardsHash === null) {
+      lastCardsHash = hash;
+      return;
+    }
+
+    // ハッシュが変わっていなければ何もしない
+    if (hash === lastCardsHash) return;
+    lastCardsHash = hash;
+
+    // データをバックグラウンドでマージ（プレイ中・編集中の画面はそのまま）
+    await fetchAndMergeDecks();
+
+    // 一覧画面を見ている時だけ、その場で再描画する
+    const activeScreen = document.querySelector('.screen.active')?.id;
+    if (activeScreen === 'screen-list') {
+      renderDeckListUI();
+    }
+  } catch(e) {}
 }
 ```
 - 変更を検知したら、まずデータだけはバックグラウンドで`decks`／`localStorage`に反映します。ただし、**画面の再描画は一覧画面（`screen-list`）を見ているときだけ**行います。コメントには「編集中／プレイ中の画面はそのままにして、リロードもしない。データは反映されているので、次に一覧へ戻ったときには最新の状態になっている」とあります。今まさにカードを編集している最中に、裏で受け取った他人の更新で画面が突然作り直されてしまうと、入力中の内容が失われかねないため、このような使い分けになっています。
