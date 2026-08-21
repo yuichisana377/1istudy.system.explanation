@@ -192,6 +192,15 @@ function renderAll() {
 ```
 - ホーム画面のサマリー（今週の勉強時間・今週のポイント・累計勉強時間）を計算・表示し、ランキング・自分のログ一覧・みんなの記録の3つの描画関数をまとめて呼び出す、いわば「ホーム画面全体を作り直す」総合関数です。ニックネーム変更やログ削除など、表示に影響する操作のあとには、必ずこの関数が呼ばれます。
 
+```js
+function renderRankings(wl) {
+  var rd = buildRankData(wl);
+  document.getElementById("ranking-time").innerHTML =
+    rankHTML(rd.byTime, function(u){ return u.min + "分"; }, "sl-rank-val-time", "nickname");
+  document.getElementById("ranking-pts").innerHTML  =
+    rankHTML(rd.byPts,  function(u){ return u.pts + "pt"; }, "sl-rank-val-pts",  "nickname");
+}
+```
 `renderRankings(wl)`（787〜793行）は5節の`buildRankData`の結果を、`rankHTML`（8節）でHTML化して2つのランキング列にそれぞれ流し込みます。
 
 ### 6.1 ランキング行のHTML組み立て：`rankHTML(sorted, valFn, valClass, nameKey)`（795〜811行）

@@ -122,6 +122,51 @@ function startSyncPolling() {
 ```
 - 20秒ごとに、サーバーの「本当の」状態と同期します。コメントに「他端末での一時停止／再開、3時間ごとの自動休憩などを検知するため」とあります。
 
+```js
+async function syncTimerFromServer() {
+  var res = await timerApiState();
+  if (!res || !res.ok) return;
+
+  if (res.state === "idle") {
+    // 保存・破棄が別端末で済んだ
+    clearInterval(timerInterval);     timerInterval     = null;
+    clearInterval(timerSyncInterval); timerSyncInterval = null;
+    var onTimerScreen =
+      document.getElementById("timer-main").style.display === "block" ||
+      document.getElementById("timer-confirm").style.display === "block";
+    if (onTimerScreen) timerReset();
+    return;
+  }
+
+  if (res.state === "paused" && timerRunning) {
+    // ★ 3時間経過による自動休憩、または他端末での一時停止
+    clearInterval(timerInterval); timerInterval = null;
+    applyServerTimerState(res);
+    updateTimerUI();
+    document.getElementById("btn-pause").textContent = "▶ 再開";
+    if (pauseReason === "checkpoint") {
+      document.getElementById("timer-status").textContent = "休憩中...（3時間経過したため自動的に休憩にしました。再開すると続きから計測できます）";
+      notifyUserBrowserOnly("StudyLog", "3時間が経過したため、自動的に休憩（一時停止）にしました。「再開」から続きを計測できます。");
+    } else {
+      document.getElementById("timer-status").textContent = "休憩中...（他の端末で一時停止されました）";
+    }
+    startSyncPolling();
+    return;
+  }
+
+  if (res.state === "running" && timerIsPaused) {
+    applyServerTimerState(res);
+    document.getElementById("btn-pause").textContent    = "⏸ 休憩";
+    document.getElementById("timer-status").textContent = "計測中...（他の端末で再開されました）";
+    startInterval();
+    return;
+  }
+
+  if (res.state === "running") {
+    applyServerTimerState(res); // ズレ補正
+  }
+}
+```
 `syncTimerFromServer()`（1304〜1346行）は、サーバーから返ってきた状態と、この端末が今思っている状態を比較し、**ズレていたら追従する**処理です：
 
 - **`res.state === "idle"`**（サーバー側ではもうタイマーが動いていない）：これは、**別の端末で既に保存または破棄が行われた**ことを意味します。今この端末がまだタイマー画面（計測中 or 確認画面）を表示していれば、`timerReset()`（8節）で表示をリセットします。
@@ -309,18 +354,108 @@ async function timerStop() {
 
 ## 8. 保存・修正・破棄・リセット（1522〜1609行）
 
-`saveTimer()`（1522〜1577行）は、[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)の`saveManual`と似た構造で、こちらは「前回のタイマー記録から、**今回記録しようとしている分数以上**の実時間が経過していないと保存できない」というクールダウンチェックを行います。コメントに「タイマーの経過時間を改ざんして即座に長時間記録するのを防ぐ」とあります。もしこのチェックが無いと、悪意のある利用者がブラウザの開発者ツールなどで`timerSec`の値を直接書き換えて、実際には計測していない長時間の記録を送信できてしまう可能性があります（この端末側のチェックも「あくまで早めに気づかせるため」で、[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)の手入力と同様、最終的な防御はサーバー側にもあります）。
-
 ```js
-setTimerLastLog(mins); // ★ 保存成功後に記録
-timerApiStop(); // ★ サーバー側のタイマー状態も後片付け（自動停止からの保存の場合など。結果は待たない）
+async function saveTimer() {
+  var sub  = document.getElementById("conf-subject").value;
+  var memo = document.getElementById("conf-memo").value.trim();
+  var mins = parseInt(document.getElementById("conf-time").dataset.min);
+  var btnEl    = document.querySelector('button[onclick*="saveTimer"]');
+  var editBtn  = document.querySelector('button[onclick*="editTimer"]');
+  var discBtn  = document.querySelector('button[onclick*="discardTimer"]');
+
+  if (btnEl && btnEl.disabled) return; // ★ 連打防止：送信中は何もしない
+
+  // ★ 前回のタイマー記録から「今回記録しようとしている分数」以上の
+  //    実時間が経過していない場合は保存させない（誤操作・二重送信防止）
+  var last = getTimerLastLog();
+  if (last && last.at) {
+    var elapsedMs  = Date.now() - last.at;
+    var requiredMs = mins * 60 * 1000;
+    if (elapsedMs < requiredMs) {
+      var remainMin = Math.ceil((requiredMs - elapsedMs) / 60000);
+      await showAppAlert({
+        title: "この記録は保存できません",
+        desc: "前回の記録からまだ十分な時間が経過していないため、あと約" + remainMin + "分待つ必要があります。",
+      });
+      return;
+    }
+  }
+
+  setButtonLoading(btnEl, true, "保存中…");
+  if (editBtn) editBtn.disabled = true;
+  if (discBtn) discBtn.disabled = true;
+
+  var result = await postLog({ date: todayStr(), subject: sub, minutes: mins, memo: memo,
+            student_id: STUDENT.id, nickname: STUDENT.nickname, method: "timer" });
+
+  if (!result.ok) {
+    // ★ サーバー側の不正防止チェックで拒否された場合など。
+    //    確認画面はそのまま残し、ユーザーがもう一度試せるようにする。
+    setButtonLoading(btnEl, false);
+    if (editBtn) editBtn.disabled = false;
+    if (discBtn) discBtn.disabled = false;
+    showAppAlert({ title: "保存に失敗しました", desc: result.error || "" });
+    return;
+  }
+
+  setTimerLastLog(mins); // ★ 保存成功後に記録
+  timerApiStop(); // ★ サーバー側のタイマー状態も後片付け（自動停止からの保存の場合など。結果は待たない）
+
+  var okEl = document.getElementById("timer-ok");
+  okEl.style.display = "block";
+  setTimeout(function() {
+    okEl.style.display = "none";
+    setButtonLoading(btnEl, false);
+    if (editBtn) editBtn.disabled = false;
+    if (discBtn) discBtn.disabled = false;
+    timerReset(); showTab("home");
+  }, 1200);
+}
 ```
+`saveTimer()`（1522〜1577行）は、[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)の`saveManual`と似た構造で、こちらは「前回のタイマー記録から、**今回記録しようとしている分数以上**の実時間が経過していないと保存できない」というクールダウンチェックを行います。コメントに「タイマーの経過時間を改ざんして即座に長時間記録するのを防ぐ」とあります。もしこのチェックが無いと、悪意のある利用者がブラウザの開発者ツールなどで`timerSec`の値を直接書き換えて、実際には計測していない長時間の記録を送信できてしまう可能性があります（この端末側のチェックも「あくまで早めに気づかせるため」で、[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)の手入力と同様、最終的な防御はサーバー側にもあります）。
 - 保存が成功したら、サーバー側のタイマー状態（7.3節で「一時停止」のまま残していたもの）を`timerApiStop()`で完全にクリアします。この呼び出しの結果は`await`せず、結果を待たずに次の処理（成功メッセージの表示など）に進んでいます（後片付けなので、ユーザーを待たせる必要が無いためです）。
 
+```js
+async function editTimer() {
+  var el  = document.getElementById("conf-time");
+  var cur = parseInt(el.dataset.min);
+  var v   = await showAppPrompt({ title: "分数を修正", label: "分数を修正してください", value: String(cur), inputType: "number" });
+  if (v && parseInt(v) >= 1) {
+    el.dataset.min = parseInt(v); el.textContent = parseInt(v) + "分 00秒";
+  }
+}
+```
 `editTimer()`（1579〜1586行）は、確認画面で計測結果の分数を手動で修正する機能です。`showAppPrompt`（`Dialog.js`共通の入力ダイアログ）を使い、入力された値が1以上ならその場で表示を書き換えます。
 
+```js
+async function discardTimer() {
+  const ok = await showAppConfirm({ title: "この計測結果を破棄しますか？", okLabel: "破棄する", danger: true });
+  if (ok) {
+    timerApiStop(); // ★ サーバー側のタイマー状態も後片付け（結果は待たない）
+    timerReset(); showTab("home");
+  }
+}
+```
 `discardTimer()`（1587〜1593行）は確認のあと`timerApiStop()`でサーバー側の記録も消し、`timerReset()`で表示をリセットします。
 
+```js
+function timerReset() {
+  clearInterval(timerInterval);     timerInterval     = null;
+  clearInterval(timerSyncInterval); timerSyncInterval = null;
+  timerSec = 0; timerRunning = false; timerIsPaused = false; pauseReason = null;
+  accumulatedSec = 0; runStartClientEpoch = null; lastAwardedMin = 0; lastCheckpointMin = 0;
+  document.getElementById("timer-display").textContent   = "00:00:00";
+  document.getElementById("timer-status").textContent    = "準備完了";
+  document.getElementById("timer-pts-hint").textContent  = "";
+  document.getElementById("btn-start").disabled  = false;
+  document.getElementById("btn-pause").disabled  = true;
+  document.getElementById("btn-stop").disabled   = true;
+  document.getElementById("btn-pause").textContent = "⏸ 休憩";
+  document.getElementById("timer-main").style.display    = "block";
+  document.getElementById("timer-confirm").style.display = "none";
+  document.getElementById("conf-memo").value = "";
+}
+```
 `timerReset()`（1594〜1609行）はタイマーに関するあらゆる状態変数とタイマー処理（`setInterval`）を止めて初期状態に戻す、後片付け用の関数です。
 
 ---
