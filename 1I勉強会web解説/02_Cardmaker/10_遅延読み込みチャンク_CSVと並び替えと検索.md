@@ -321,6 +321,12 @@ for (const d of searchTargetDecks) {
 - 対象デッキの全カードを1件ずつ総当たりで確認する、シンプルな線形探索です（デッキ数・カード数がこの規模であれば十分な速さです）。問題文・解答のどちらかに検索語が含まれていればヒットとします。
 - `mathToPlainText`（[09_Cardmaker.js_その9_数式入力とリアルタイム更新.md](09_Cardmaker.js_その9_数式入力とリアルタイム更新.md)）を通してから比較しているので、`\sqrt{4}`のような生のLaTeX記法で保存されている古いカードでも、`√(4)`のような読みやすい形に変換されたうえで検索対象になります。
 
+```js
+function onSearchInput() {
+  clearTimeout(searchDebounceTimer);
+  searchDebounceTimer = setTimeout(runSearch, 150);
+}
+```
 `onSearchInput()`（70〜73行）は、入力欄に何か入力されるたびに呼ばれますが、`clearTimeout`＋`setTimeout(runSearch, 150)`という**デバウンス（debounce）**という手法を使っています。1文字打つたびに即座に検索を実行するのではなく、「最後の入力から150ミリ秒操作が無ければ検索する」という形にすることで、高速に連続入力しているときに何度も無駄な検索処理が走らないようにしています。
 
 ### 3.5 検索結果から「一覧で見る」画面へ（110〜132行）
