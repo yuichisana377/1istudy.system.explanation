@@ -1,4 +1,4 @@
-# `/setchannel`・`/setup_roles`・リアクション振り分け（`bot.py` 1773〜1929行）
+# `/setchannel`・`/setup_roles`・リアクション振り分け（`bot.py` 1773〜1955行）
 
 対象：`bot.py`の「/setchannel」「/setup_roles（通生/寮生 振り分けパネル）」セクション。
 
@@ -31,9 +31,39 @@ async def setchannel(interaction: discord.Interaction, type: app_commands.Choice
 - 選ばれた種類に応じて、`config`（このguildの設定）の対応するフィールドに、**今このコマンドを実行したチャンネルのID**（`interaction.channel.id`）を保存します。「このコマンドを実行したチャンネル自体が、その種類の通知先になる」という直感的な設定方法です。
 - 保存された`config`は、後述する自動通知の章（`send_tomorrow_plans`など）で、「どのチャンネルに通知を送るか」を決めるために読み込まれることになります。
 
-## 2. `/setup_roles`：通生/寮生の振り分けパネル（1811〜1867行）
+## 2. `/setup_roles`：通生/寮生の振り分けパネル（1832〜1892行）
 
 これは、生徒が絵文字のリアクションを押すだけで「通生」または「寮生」のロール（Discordのメンバーに付けられる役職・グループのようなもの）を自動的に付け外しできるようにする機能です。
+
+### 2-0. `_migrate_role_panels`：複数枚のパネルを配列で管理する（1808〜1826行）
+
+```python
+def _migrate_role_panels(config: dict) -> list:
+    """config内のロール振り分けパネル一覧を取得する。
+    以前は1サーバーにつき1枚分の情報（role_panel_message_id等）しか
+    保持できず、2枚目を投稿すると1枚目の設定が上書きされて動かなく
+    なっていたため、複数枚を配列（role_panels）で管理する形式に変更した。
+    旧形式のデータが残っている場合は1件だけ引き継ぐ。"""
+    panels = config.get("role_panels")
+    if isinstance(panels, list):
+        return list(panels)
+    panels = []
+    legacy_msg_id = config.get("role_panel_message_id")
+    if legacy_msg_id:
+        panels.append({
+            "message_id": legacy_msg_id,
+            "channel_id": config.get("role_panel_channel_id"),
+            "commuter_role_id": config.get("commuter_role_id"),
+            "dorm_role_id": config.get("dorm_role_id"),
+        })
+    return panels
+```
+
+- **この関数が追加された経緯**：以前の実装は、`config["role_panel_message_id"]`のように**単一のキー**にパネル1枚分の情報しか保存していませんでした。そのため`/setup_roles`を2回実行して振り分けパネルを2枚投稿すると、2枚目の情報で1枚目の情報が完全に上書きされてしまい、1枚目のパネルへのリアクションが（後述の`_handle_role_reaction`側で「保存されているメッセージIDと一致しない」と判定されて）反応しなくなる不具合がありました。同じguildで通生/寮生パネルを複数チャンネルに投稿したい、あるいは作り直したいときにこの不具合が発生していました。
+- **修正方針**：パネル情報を`config["role_panels"]`という**リスト（配列）**で管理するようにし、パネルを新しく投稿するたびに上書きではなく**追記**するようにしました。これにより、何枚パネルを投稿しても、それぞれが自分自身のメッセージID・チャンネルID・ロールIDを覚えたまま独立して動作します。
+- `isinstance(panels, list)`… 既に新形式（リスト）で保存されていれば、そのままコピーして返します（`list(panels)`としているのは、呼び出し元でこのリストに`.append()`しても、元の`config`オブジェクトを意図せず直接書き換えてしまわないようにするための防御的コピーです）。
+- 新形式のデータがまだ無い場合（＝今回の修正より前に`/setup_roles`が実行されていた場合）は、旧形式のキー（`role_panel_message_id`など）から1件分のパネル情報を組み立てて返します。これにより、**サーバーに既に投稿されている古いパネルも、修正後のコードで引き続き問題なく動作し続けます**（データの移行作業なしで自動的に新形式へ引き継がれる、後方互換の仕組みです）。
+- この関数は、パネルを新規追加する`setup_roles`側と、リアクションを処理する`_handle_role_reaction`側の**両方**から呼ばれます。「パネル一覧の取り出し方」というロジックを1箇所にまとめることで、片方だけ実装を直し忘れる、といった食い違いを防いでいます。
 
 ```python
 @bot.tree.command(name="setup_roles", description="通生/寮生 振り分けパネルを投稿します")
@@ -77,16 +107,20 @@ async def setup_roles(
 
 ```python
     config = await async_load_config(guild.id)
-    config["role_panel_message_id"] = msg.id
-    config["role_panel_channel_id"] = msg.channel.id
-    config["commuter_role_id"] = 通生ロール.id
-    config["dorm_role_id"] = 寮生ロール.id
+    panels = _migrate_role_panels(config)
+    panels.append({
+        "message_id": msg.id,
+        "channel_id": msg.channel.id,
+        "commuter_role_id": 通生ロール.id,
+        "dorm_role_id": 寮生ロール.id,
+    })
+    config["role_panels"] = panels
     try:
         await async_save_config(guild.id, config)
     except DataWriteError as e:
         ...
 ```
-- 投稿したパネルのメッセージID・チャンネルID、そして指定された2つのロールのIDを`config`に保存します。これにより、後で誰かがこのパネルにリアクションしたときに、「これはどのメッセージへのリアクションで、どのロールを付け外しすればよいか」を照合できるようになります。
+- 投稿したパネルのメッセージID・チャンネルID、そして指定された2つのロールのIDを、`_migrate_role_panels`で取得した一覧（既存のパネル情報を含む）の**末尾に追加**してから保存します。これが単純な代入（`config["role_panel_message_id"] = msg.id`のような上書き）ではなく`panels.append(...)`になっている点が、上の「2-0」で説明した修正の核心です。これにより、後で誰かがどのパネルにリアクションしたときも、「これはどのメッセージへのリアクションで、どのロールを付け外しすればよいか」を、パネルごとに正しく照合できるようになります。
 
 ```python
 @setup_roles.error
@@ -100,7 +134,7 @@ async def setup_roles_error(interaction: discord.Interaction, error: app_command
 ```
 - `@setup_roles.error`… `setup_roles`コマンドの実行中にエラーが起きたときに呼ばれる、専用のエラーハンドラーです。特に`app_commands.MissingPermissions`（先ほどの権限チェックに引っかかった場合に自動的に発生する例外）を`isinstance`で判定し、分かりやすい日本語のメッセージに変換して返しています。それ以外の予期しないエラーは、そのままエラー内容を表示します。
 
-## 3. リアクションの監視と実際のロール付け外し（1870〜1929行）
+## 3. リアクションの監視と実際のロール付け外し（1895〜1955行）
 
 ```python
 async def _handle_role_reaction(payload: discord.RawReactionActionEvent, add: bool):
@@ -108,16 +142,18 @@ async def _handle_role_reaction(payload: discord.RawReactionActionEvent, add: bo
         return
 
     config = await async_load_config(payload.guild_id)
-    panel_message_id = config.get("role_panel_message_id")
-    if not panel_message_id or payload.message_id != panel_message_id:
+    panels = _migrate_role_panels(config)
+    panel = next((p for p in panels if p.get("message_id") == payload.message_id), None)
+    if panel is None:
         return
+    panel_message_id = panel["message_id"]
 
     emoji = str(payload.emoji)
     if emoji not in (EMOJI_COMMUTER, EMOJI_DORM):
         return
 ```
 - `RawReactionActionEvent`… メッセージへのリアクションの追加・削除という「生の」イベント情報です。「生の」と付いているのは、Discord.pyには「メッセージがBotのキャッシュに載っていなくても発生する」低レベルなイベント（Raw版）と、「キャッシュに載っているメッセージに対してだけ発生する」より扱いやすい高レベルなイベントの2種類があり、ここでは前者（Raw版）を使っているためです。パネルメッセージがBotの起動後しばらく経ってキャッシュから外れていても、確実にリアクションを検知できるようにするためです。
-- **早期リターンの積み重ね**によるフィルタリングになっています。DMでのリアクション（`guild_id is None`）は無視し、保存されているパネルのメッセージID（`role_panel_message_id`）と一致しないメッセージへのリアクションも無視し、🚃🏠以外の絵文字も無視します。これにより、サーバー内のあらゆるメッセージへの、あらゆるリアクションのたびにこの関数が呼ばれても、関係の無いものはごく短時間で処理を終えて無視できます。
+- **早期リターンの積み重ね**によるフィルタリングになっています。DMでのリアクション（`guild_id is None`）は無視します。次に、`_migrate_role_panels`で取得したパネル一覧の中から、`next(...)`（ジェネレータ式に一致する最初の要素を探し、無ければ`None`を返す組み込み関数）で「今リアクションされたメッセージID」と一致するパネルを探します。以前はパネル情報が1件しか無かったため単純な一致比較で済んでいましたが、複数枚のパネルが存在しうる今は、**このメッセージがどのパネルなのか**をリストから特定する必要があります。一致するパネルが無ければ（＝振り分けパネルとは無関係な、サーバー内の他のメッセージへのリアクションであれば）何もせず終了し、🚃🏠以外の絵文字も無視します。
 
 ```python
     guild = bot.get_guild(payload.guild_id)
@@ -128,12 +164,13 @@ async def _handle_role_reaction(payload: discord.RawReactionActionEvent, add: bo
     if member is None or member.bot:
         return
 
-    commuter_role = guild.get_role(config.get("commuter_role_id"))
-    dorm_role = guild.get_role(config.get("dorm_role_id"))
-    channel_id = config.get("role_panel_channel_id")
+    commuter_role = guild.get_role(panel.get("commuter_role_id"))
+    dorm_role = guild.get_role(panel.get("dorm_role_id"))
+    channel_id = panel.get("channel_id")
     channel = guild.get_channel(channel_id) if channel_id else None
 ```
 - `member.is None or member.bot`… リアクションした相手がメンバー情報を取得できない、またはBot自身（もしくは他のBot）である場合は無視します。Botが自分自身のリアクション（`setup_roles`の中で最初に付けた🚃🏠）に反応して無限ループのような処理をしてしまわないようにするための、重要なガードです。
+- ロールID・チャンネルIDの取り出し元が、以前の`config.get(...)`（guild全体で共通のパネル1枚分の情報）から、`panel.get(...)`（上で特定した**そのパネル自身**が持つ情報）に変わっている点に注目してください。パネルごとに別々の通生/寮生ロールを割り当てている場合でも、それぞれのパネルが自分に対応するロールだけを正しく参照できます。
 
 ```python
     try:
