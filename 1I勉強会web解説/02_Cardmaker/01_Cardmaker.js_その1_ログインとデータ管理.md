@@ -23,10 +23,18 @@ const STUDENT = (function() {
 
 ```js
 function applyAccountHeader() {
-  var avatarEl = document.getElementById("header-avatar");
-  ...
-  if (!STUDENT.nickname) return; // 通常はここに来る前にログイン画面へ飛んでいるはずだが念のため
-  ...
+  var avatarEl   = document.getElementById("header-avatar");
+  var nicknameEl = document.getElementById("header-nickname");
+  var idEl       = document.getElementById("header-id");
+  if (!STUDENT.nickname) return; // ★ 通常はここに来る前にログイン画面へ飛んでいるはずだが念のため
+
+  if (avatarEl) {
+    avatarEl.textContent      = STUDENT.nickname.slice(0, 2).toUpperCase();
+    avatarEl.style.background = STUDENT.color;
+    avatarEl.style.color      = STUDENT.textColor;
+  }
+  if (nicknameEl) nicknameEl.textContent = STUDENT.nickname;
+  if (idEl)       idEl.textContent       = STUDENT.id;
 }
 applyAccountHeader();
 ```
@@ -108,7 +116,7 @@ async function fetchAndMergeOrder() {
 - `countUnsureRecursive(folderId)`：あるフォルダ配下の「わからない」マークが付いたカードの合計数。まだカード本体を読み込んでいないデッキは数えられないのでスキップする、という注意書きがあります。
 - `collectDecksInFolder(folderId)`：あるフォルダ配下の全デッキを1つの配列に集める。
 - `isDeckInFolderScope`/`isFolderInFolderScope`：あるデッキ／フォルダが、指定したフォルダの範囲内（サブフォルダ含む）にあるかどうかの判定。
-- `canMoveDeckTo(deckId, targetFolderId)`：デッキ版の移動可否判定。フォルダのような階層数の制限は無く、「クイズ過去問フォルダの中のデッキは外に出せない」という制限だけがあります。
+- `canMoveDeckTo(deckId, targetFolderId)`：デッキ版の移動可否判定。フォルダのような階層数の制限は無く、今のところ特別な制限もありません（常に`true`）。★ 以前は「クイズ過去問フォルダの中のデッキは外に出せない」という制限がありましたが、2026/08/21にユーザーの要望で撤廃されました。クイズ過去問デッキも他のフォルダへ移動できますが、代わりに「問題の編集はできない」という別の制限が設けられています（`openDeckMenu`・`bot.py`側の`save_cards`を参照。[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)参照）。
 
 ---
 
@@ -194,11 +202,21 @@ function renderChoiceEditorRows(prefix, choices, correctIdx) {
       <input type="text" class="modal-input" id="${prefix}-choice-${i}" placeholder="選択肢 ${CHOICE_LETTERS[i] || ''}" maxlength="80" style="margin-bottom:0">
       ${n > CHOICE_MIN ? `<button type="button" class="choice-remove-btn" data-ridx="${i}" title="この選択肢を削除">${Icons.html('close', {size:14})}</button>` : ''}
     </div>`).join('');
-  ...
+  const addBtnHtml = n < CHOICE_MAX
+    ? `<button type="button" class="block-action-btn" id="${prefix}-add-btn" style="margin-top:.25rem">＋ 選択肢を追加</button>` : '';
+  const container = document.getElementById(`${prefix}-rows`);
   container.innerHTML = rowsHtml + addBtnHtml;
+
+  // ★ value属性への直接埋め込みはエスケープ事故（クォート等）の元になるため、
+  //   空要素を描画してから .value / .checked をJSで設定する
   choices.forEach((val, i) => { document.getElementById(`${prefix}-choice-${i}`).value = val; });
   correctIdx.forEach(i => { const el = document.getElementById(`${prefix}-correct-${i}`); if (el) el.checked = true; });
-  ...
+
+  const addBtn = document.getElementById(`${prefix}-add-btn`);
+  if (addBtn) addBtn.onclick = () => addChoiceRow(prefix);
+  container.querySelectorAll('.choice-remove-btn').forEach(btn => {
+    btn.onclick = () => removeChoiceRow(prefix, Number(btn.dataset.ridx));
+  });
 }
 ```
 - 選択肢の入力行を作り直す関数です。ここで注目したいのは、入力欄の`value`（今入っている文字列）を**HTML文字列の中に直接埋め込んでいない**点です。まず空の入力欄だけをHTMLとして作ってから、あとで`.value = val`とJSで代入しています。コメントに「value属性への直接埋め込みはエスケープ事故（クォート等）の元になるため」とある通り、`"`を含む文字列を`value="${val}"`のように直接埋め込んでしまうと、その`"`のところで属性が途切れてHTMLが壊れてしまう危険があるため、これを避ける安全な書き方をしています。

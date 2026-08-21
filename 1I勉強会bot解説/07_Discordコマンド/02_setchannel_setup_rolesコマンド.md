@@ -13,7 +13,10 @@
     app_commands.Choice(name="お知らせ用", value="main"),
 ])
 async def setchannel(interaction: discord.Interaction, type: app_commands.Choice[str] = None):
-    ...
+    await interaction.response.defer(ephemeral=True)
+    guild_id = interaction.guild.id
+    config = await async_load_config(guild_id)
+
     kind = type.value if type else "commute"
     if kind == "dorm":
         config["remind_channel_id_dorm"] = interaction.channel.id
@@ -24,7 +27,15 @@ async def setchannel(interaction: discord.Interaction, type: app_commands.Choice
     else:
         config["remind_channel_id"] = interaction.channel.id
         label = "通生（朝5:30・夜20:00）"
-    ...
+
+    try:
+        await async_save_config(guild_id, config)
+    except DataWriteError as e:
+        await interaction.followup.send(f"保存に失敗しました（データ保存エラー）。もう一度お試しください。\n{e}", ephemeral=True)
+        return
+    await interaction.followup.send(
+        f"{label} の通知チャンネルを **#{interaction.channel.name}** に設定しました！"
+    )
 ```
 - `@app_commands.choices(type=[...])`… `type`引数を自由入力ではなく、あらかじめ決められた3つの選択肢（`Choice`）からしか選べないようにする指定です。[00_ユーティリティ関数と_addコマンド.md](00_ユーティリティ関数と_addコマンド.md)のオートコンプリート（自由入力＋候補表示）とは違い、こちらは**候補以外を入力できない**という、より厳格な制約です。通知チャンネルの種類は決め打ちで数が少ないため、こちらの方式が使われています。
 - `type: app_commands.Choice[str] = None`… デフォルト値が`None`なので、省略も可能です。省略時は`kind = type.value if type else "commute"`により`"commute"`（通生）扱いになります。
@@ -118,7 +129,10 @@ async def setup_roles(
     try:
         await async_save_config(guild.id, config)
     except DataWriteError as e:
-        ...
+        await interaction.followup.send(f"保存に失敗しました（データ保存エラー）。パネルは投稿済みですが、設定の保存に失敗しました。\n{e}", ephemeral=True)
+        return
+
+    await interaction.followup.send("パネルを投稿しました。", ephemeral=True)
 ```
 - 投稿したパネルのメッセージID・チャンネルID、そして指定された2つのロールのIDを、`_migrate_role_panels`で取得した一覧（既存のパネル情報を含む）の**末尾に追加**してから保存します。これが単純な代入（`config["role_panel_message_id"] = msg.id`のような上書き）ではなく`panels.append(...)`になっている点が、上の「2-0」で説明した修正の核心です。これにより、後で誰かがどのパネルにリアクションしたときも、「これはどのメッセージへのリアクションで、どのロールを付け外しすればよいか」を、パネルごとに正しく照合できるようになります。
 
@@ -130,7 +144,10 @@ async def setup_roles_error(interaction: discord.Interaction, error: app_command
             "このコマンドには「ロールの管理」権限が必要です。", ephemeral=True
         )
     else:
-        ...
+        if interaction.response.is_done():
+            await interaction.followup.send(f"エラー: {error}", ephemeral=True)
+        else:
+            await interaction.response.send_message(f"エラー: {error}", ephemeral=True)
 ```
 - `@setup_roles.error`… `setup_roles`コマンドの実行中にエラーが起きたときに呼ばれる、専用のエラーハンドラーです。特に`app_commands.MissingPermissions`（先ほどの権限チェックに引っかかった場合に自動的に発生する例外）を`isinstance`で判定し、分かりやすい日本語のメッセージに変換して返しています。それ以外の予期しないエラーは、そのままエラー内容を表示します。
 
