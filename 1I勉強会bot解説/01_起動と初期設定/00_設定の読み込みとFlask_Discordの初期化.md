@@ -9,9 +9,29 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from datetime import datetime, timedelta
+from datetime import date as _date
 from flask import Flask, request, jsonify, make_response, redirect, Response
 from flask_cors import CORS
-...
+from threading import Thread, Lock
+from pytz import timezone
+import json
+import os
+import requests
+import base64
+import asyncio
+import time
+import hashlib
+import hmac
+import re
+import secrets
+import random
+import difflib
+import queue
+import subprocess
+import shutil
+import html
+from urllib.parse import urlencode
 ```
 - 冒頭で使うライブラリをまとめて読み込んでいます。大きく分けると、①`discord`系（Discord Botを作るためのライブラリ）、②`flask`系（Web APIサーバーを作るためのライブラリ）、③`apscheduler`（「毎日この時刻に実行」のような定期処理を仕込むライブラリ）、④`hashlib`・`hmac`・`secrets`（暗号学的な処理。パスワードやトークンの安全な取り扱いに使う）などです。**1つのPythonプロセスの中で、Discord BotとWebサーバーの両方が同時に動いている**のがこのファイルの特徴です。
 

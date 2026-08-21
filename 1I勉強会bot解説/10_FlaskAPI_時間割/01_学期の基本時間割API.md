@@ -57,7 +57,9 @@ def _term_lines(t):
 ```python
 @app.route("/list_terms", methods=["GET"])
 def list_terms():
-    ...
+    guild_id = request.args.get("guild_id")
+    if not guild_id:
+        return jsonify({"ok": False, "error": "missing guild_id"})
     terms = load_terms(int(guild_id))
     return jsonify({"ok": True, "terms": list(terms.values())})
 ```
@@ -66,7 +68,10 @@ def list_terms():
 ```python
 @app.route("/save_term", methods=["POST"])
 def save_term():
-    ...
+    data       = request.json or {}
+    guild_id, _student_id, nickname, err = require_login_json(data)  # ★ 変更にはログイン必須
+    if err:
+        return err
     name       = data.get("name")
     start_date = data.get("start_date")
     end_date   = data.get("end_date")
@@ -75,10 +80,16 @@ def save_term():
         return jsonify({"ok": False, "error": "missing fields"})
     if end_date < start_date:
         return jsonify({"ok": False, "error": "終了日は開始日以降にしてください"})
-    ...
+
+    err = reject_if_bug_chars({"学期名": name})
+    if err:
+        return err
+
     terms = load_terms(guild_id)
     term_id = data.get("id") or f"term_{time.time_ns()}"
 
+    # ★ 期間の重複チェック（自分自身は除く）。前期・後期が重なると
+    #   どちらの時間割を使うべきか曖昧になるため保存前に弾く。
     for tid, t in terms.items():
         if tid == term_id:
             continue
@@ -90,12 +101,27 @@ def save_term():
 - **期間の重複チェック**が、この関数で最も注目すべき部分です。「前期」と「後期」の期間が重なってしまうと、ある1つの日付に対してどちらの学期の時間割を使うべきかが曖昧になってしまいます。`for tid, t in terms.items():`で既存の全学期を確認し、`if tid == term_id: continue`（今まさに編集しようとしている学期自身は、比較対象から除外する）とした上で、`start_date <= t.get("end_date") and t.get("start_date") <= end_date`という条件で期間が重なっているかを判定します。この条件式は、「2つの期間が重ならない」ことの否定（＝ド・モルガンの法則的な考え方）から導かれる、期間の重なり判定の定石です。重なっていれば、具体的にどの学期と重なっているかを名前・期間付きのエラーメッセージで伝え、保存を拒否します。
 
 ```python
-    old_terms_text = _terms_text(terms)
+    old_terms_text = _terms_text(terms)  # ★ 運用ログでファイル全体の差分を見せるため、上書き前に控えておく
     terms[term_id] = {
-        "id": term_id, "name": name, "start_date": start_date,
-        "end_date": end_date, "timetable": timetable,
+        "id":         term_id,
+        "name":       name,
+        "start_date": start_date,
+        "end_date":   end_date,
+        "timetable":  timetable,
     }
-    ...
+    try:
+        save_terms(guild_id, terms)
+    except DataWriteError as e:
+        return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+    term_detail = f"学期時間割保存: {name}（{start_date}〜{end_date}）"
+    write_log(guild_id, "edit", detail=term_detail)
+    change = file_diff(f"terms_{guild_id}.json", old_terms_text, _terms_text(terms))
+    log_event(
+        "timetable",
+        f"学期時間割「{name}」を保存しました。",
+        actor=nickname,
+        detail=[change] if change else None,
+    )
     return jsonify({"ok": True, "id": term_id})
 ```
 - 重複が無ければ、`terms[term_id] = {...}`で保存し、（新規作成の場合はフロント側が使えるように）発行された`id`をレスポンスに含めて返します。
@@ -103,12 +129,30 @@ def save_term():
 ```python
 @app.route("/delete_term", methods=["POST"])
 def delete_term():
-    ...
+    data     = request.json or {}
+    guild_id, _student_id, nickname, err = require_login_json(data)  # ★ 変更にはログイン必須
+    if err:
+        return err
+    term_id  = data.get("id")
+    if not term_id:
+        return jsonify({"ok": False, "error": "missing fields"})
     terms = load_terms(guild_id)
     if term_id in terms:
-        ...
+        name = terms[term_id].get("name", term_id)
+        old_terms_text = _terms_text(terms)
         del terms[term_id]
-        ...
+        try:
+            save_terms(guild_id, terms)
+        except DataWriteError as e:
+            return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+        write_log(guild_id, "edit", detail=f"学期時間割削除: {name}")
+        change = file_diff(f"terms_{guild_id}.json", old_terms_text, _terms_text(terms))
+        log_event(
+            "timetable",
+            f"学期時間割「{name}」を削除しました。",
+            actor=nickname,
+            detail=[change] if change else None,
+        )
     return jsonify({"ok": True})
 ```
 - `/delete_term`… これも[00_時間割の上書きデータとCRUD_API.md](00_時間割の上書きデータとCRUD_API.md)の`/delete_timetable`と同じく、存在しないIDが指定されても`if term_id in terms:`のガードにより静かに成功扱いで終わる、冪等な削除です。

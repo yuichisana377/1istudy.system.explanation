@@ -59,15 +59,43 @@ def list_timetable():
 ```python
 @app.route("/update_timetable", methods=["POST"])
 def update_timetable():
-    ...
+    data     = request.json
+    guild_id, _student_id, nickname, err = require_login_json(data)  # ★ 変更にはログイン必須
+    if err:
+        return err
+    key      = data.get("key")
+    if not key:
+        return jsonify({"ok": False, "error": "missing fields"})
+
+    err = reject_if_bug_chars({"科目": data.get("subject"), "備考": data.get("note")})
+    if err:
+        return err
+
     tt = load_timetable(guild_id)
-    old_tt_text = _timetable_text(tt)
+    old_tt_text = _timetable_text(tt)  # ★ 運用ログでファイル全体の差分を見せるため、上書き前に控えておく
     tt[key] = {
-        "key": key, "type": "change", "date": data.get("date"),
-        "period": data.get("period"), "subject": data.get("subject"),
-        "items": data.get("items", []), "note": data.get("note", ""),
+        "key":     key,
+        "type":    "change",
+        "date":    data.get("date"),
+        "period":  data.get("period"),
+        "subject": data.get("subject"),
+        "items":   data.get("items", []),
+        "note":    data.get("note", ""),
     }
-    ...
+    try:
+        save_timetable(guild_id, tt)
+    except DataWriteError as e:
+        return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+    tt_detail = f"時間割変更: {key} → {data.get('subject')}"
+    write_log(guild_id, "edit", detail=tt_detail)
+    change = file_diff(f"timetable_{guild_id}.json", old_tt_text, _timetable_text(tt))
+    log_event(
+        "timetable",
+        f"時間割「{data.get('subject')}」を更新しました（{data.get('date')}）。",
+        actor=nickname,
+        detail=[change] if change else None,
+    )
+    return jsonify({"ok": True})
 ```
 - `/update_timetable`（授業変更）・`/set_holiday`（休校）・`/set_period_holiday`（1コマ休み）・`/delete_timetable`（削除）の4つは、いずれも同じパターンの繰り返しです。
   1. `require_login_json`でログイン確認。
@@ -81,7 +109,13 @@ def update_timetable():
 ```python
 @app.route("/delete_timetable", methods=["POST"])
 def delete_timetable():
-    ...
+    data     = request.json
+    guild_id, _student_id, nickname, err = require_login_json(data)  # ★ 変更にはログイン必須
+    if err:
+        return err
+    key      = data.get("key")
+    if not key:
+        return jsonify({"ok": False, "error": "missing fields"})
     tt = load_timetable(guild_id)
     if key in tt:
         old_entry = tt[key]
@@ -91,7 +125,14 @@ def delete_timetable():
             save_timetable(guild_id, tt)
         except DataWriteError as e:
             return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
-        ...
+        write_log(guild_id, "edit", detail=f"時間割変更削除: {key}")
+        change = file_diff(f"timetable_{guild_id}.json", old_tt_text, _timetable_text(tt))
+        log_event(
+            "timetable",
+            f"時間割の変更「{old_entry.get('date')}」を削除しました。",
+            actor=nickname,
+            detail=[change] if change else None,
+        )
     return jsonify({"ok": True})
 ```
 - `/delete_timetable`… `if key in tt:`で、そもそもそのキーが存在する場合だけ削除処理を行います。存在しない場合でも`return jsonify({"ok": True})`（成功扱い）で終わる点に注目してください。これは「削除しようとしたときには既に他の誰かが削除済みだった」というケースを、エラーではなく**結果として同じ状態（そのキーが存在しない）に既になっている**ため、素直に成功として扱う、という寛容な設計です（冪等性：同じ削除操作を何度呼んでも、最終的な状態は変わらない）。

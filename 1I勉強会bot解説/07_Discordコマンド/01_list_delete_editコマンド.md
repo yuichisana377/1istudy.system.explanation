@@ -12,7 +12,9 @@ async def list_plans(interaction: discord.Interaction, date: str):
     guild_id = interaction.guild.id
     plans = await async_load_plans(guild_id)
     if date.lower() == "all":
-        ...
+        if not plans:
+            await interaction.followup.send("予定はありません。", ephemeral=True)
+            return
         sorted_plans = sorted(plans, key=lambda p: p["date"])
         msg = "📘 **すべての予定一覧**\n"
         for p in sorted_plans:
@@ -21,9 +23,18 @@ async def list_plans(interaction: discord.Interaction, date: str):
         await interaction.followup.send(msg, ephemeral=True)
         return
     date_str = parse_date(date)
-    ...
+    if not date_str:
+        await interaction.followup.send("日付の形式が正しくありません！", ephemeral=True)
+        return
     selected = [p for p in plans if p["date"] == date_str]
-    ...
+    if not selected:
+        await interaction.followup.send(f"{date} の予定はありません。", ephemeral=True)
+        return
+    msg = f"📘 **{date_str} の予定**\n"
+    for p in selected:
+        pts_str = f" ⭐{p['points']}pt" if "points" in p else ""
+        msg += f"- {p['subject']} {p['content']}{pts_str}\n"
+    await interaction.followup.send(msg, ephemeral=True)
 ```
 - `date`引数に`"all"`（大文字小文字を区別しないよう`.lower()`で統一してから比較）を指定すると、全ての予定を日付順（`sorted(plans, key=lambda p: p["date"])`。`key=lambda p: p["date"]`は「並び替えの基準として、各予定の`date`フィールドを使う」という指定）に並べて一覧表示します。
 - それ以外の場合は`parse_date`で日付として解析し、その日付に一致する予定だけを`selected`として絞り込みます（リスト内包表記）。
@@ -35,7 +46,8 @@ async def list_plans(interaction: discord.Interaction, date: str):
 @bot.tree.command(name="delete", description="予定を削除する")
 @app_commands.describe(target="削除したい予定")
 async def delete_plan(interaction: discord.Interaction, target: str):
-    ...
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
     plans = await async_load_plans(guild.id)
     deleted = None
     new_plans = []
@@ -51,9 +63,13 @@ async def delete_plan(interaction: discord.Interaction, target: str):
     try:
         save_plans(guild.id, new_plans)
     except DataWriteError as e:
-        ...
+        await interaction.followup.send(f"保存に失敗しました（データ保存エラー）。もう一度お試しください。\n{e}", ephemeral=True)
+        return
     write_log(guild.id, "delete", detail=f"{deleted['date']} / {deleted['subject']} / {deleted['content']}")
-    ...
+    msg = f"削除しました！\n{target}"
+    target_channel = get_subject_channel_by_name(guild, deleted["subject"])
+    await (target_channel or interaction.channel).send(msg)
+    await interaction.followup.send("完了しました！", ephemeral=True)
 ```
 - **予定には専用のIDが無い**ため、`f"{p['date']}/{p['subject']}{p['content']}"`という「日付/科目 内容」を組み合わせた文字列（`label`）を、その予定を一意に指し示すための識別子として使っています。これは[../05_ユーザーとセッション/00_ポイント課題達成ユーザーデータとレート制限.md](../05_ユーザーとセッション/00_ポイント課題達成ユーザーデータとレート制限.md)の`_task_id_of_plan`と似た考え方ですが、区切り文字やフィールドの組み合わせ方が微妙に異なる点に注意してください（別々の目的のために、別々の場所で個別に定義されている識別子です）。
 - `deleted`（削除対象。1つだけ見つかる想定）と`new_plans`（それ以外の残す予定）の2つに、ループを回しながら振り分けています。`target`と一致する`label`を持つ予定だけを除外し、残りをまるごと`new_plans`として保存し直す、という「配列を丸ごと入れ替える」削除の仕方です（個別の要素を`remove`するのではなく、新しい配列を作って上書きする方式です）。
@@ -76,16 +92,27 @@ async def delete_autocomplete(interaction: discord.Interaction, current: str):
 
 ```python
 @bot.tree.command(name="edit", description="予定を編集する")
-@app_commands.describe(...)
+@app_commands.describe(
+    target="編集したい予定",
+    date="新しい日付",
+    subject="新しい科目",
+    category="新しい分類",
+    content="新しい内容",
+    points="新しいポイント（提出・宿題のみ有効）"
+)
 async def edit_plan(interaction: discord.Interaction, target: str, date: str = None, subject: str = None, category: str = None, content: str = None, points: int = None):
-    ...
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    plans = await async_load_plans(guild.id)
     found = None
     for p in plans:
         label = f"{p['date']}/{p['subject']}{p['content']}"
         if label == target:
             found = p
             break
-    ...
+    if not found:
+        await interaction.followup.send("その予定が見つかりませんでした。", ephemeral=True)
+        return
 ```
 - `date`・`subject`・`category`・`content`・`points`は全て**省略可能**（デフォルト値`None`）な引数です。「変更したい項目だけを指定し、それ以外は元のまま残す」という部分更新の形になっています。
 - `for ... break`… `target`と一致する予定を見つけたら`break`でループを打ち切ります（`/delete`のようにループを最後まで回して振り分ける必要はなく、1件見つければそれで十分だからです）。
@@ -94,7 +121,9 @@ async def edit_plan(interaction: discord.Interaction, target: str, date: str = N
     before_str = f"{found['date']} / {found['subject']} / {found['content']}"
     if date:
         date_str = parse_date(date)
-        ...
+        if not date_str:
+            await interaction.followup.send("日付の形式が正しくありません！", ephemeral=True)
+            return
         found["date"] = date_str
     if subject:
         found["subject"] = subject
@@ -133,24 +162,43 @@ async def edit_plan(interaction: discord.Interaction, target: str, date: str = N
     try:
         await async_save_plans(guild.id, plans)
     except DataWriteError as e:
-        ...
+        await interaction.followup.send(f"保存に失敗しました（データ保存エラー）。もう一度お試しください。\n{e}", ephemeral=True)
+        return
     after_str = f"{found['date']} / {found['subject']} / {found['content']}"
     await async_write_log(guild.id, "edit", detail=f"{before_str} → {after_str}")
     msg = f"編集しました！\n\n【編集前】\n{before_str}\n\n【編集後】\n{after_str}"
-    ...
+    if "points" in found:
+        msg += f"\n⭐ {found['points']}pt"
+    target_channel = get_subject_channel_by_name(guild, found["subject"])
+    await (target_channel or interaction.channel).send(msg)
+    await interaction.followup.send("完了しました！", ephemeral=True)
 ```
 - `found`はここまでの処理で`plans`（読み込んだ配列全体）の中の1要素そのものを直接書き換えてきているので（Pythonでは辞書やリストの要素は参照渡しされるため、`found`を書き換えると`plans`の中身も一緒に変わります）、最後に`async_save_plans(guild.id, plans)`で`plans`全体を保存すれば、変更が反映されます。
 - `before_str`と`after_str`を組み合わせたメッセージで、「何がどう変わったか」が一目で分かる編集完了メッセージを組み立てています。
 
 ```python
 @edit_plan.autocomplete("target")
-async def edit_target_autocomplete(...): ...
+async def edit_target_autocomplete(interaction: discord.Interaction, current: str):
+    plans = load_plans(interaction.guild.id)
+    choices = []
+    for p in plans:
+        label = f"{p['date']}/{p['subject']}{p['content']}"
+        if current in label:
+            choices.append(app_commands.Choice(name=label, value=label))
+    return choices[:25]
 
 @edit_plan.autocomplete("subject")
-async def edit_subject_autocomplete(...): ...
+async def edit_subject_autocomplete(interaction: discord.Interaction, current: str):
+    channels = get_subject_channels(interaction.guild)
+    return [
+        app_commands.Choice(name=ch.name, value=ch.name)
+        for ch in channels if current.lower() in ch.name.lower()
+    ][:25]
 
 @edit_plan.autocomplete("category")
-async def edit_category_autocomplete(...): ...
+async def edit_category_autocomplete(interaction: discord.Interaction, current: str):
+    candidates = ["宿題", "提出", "持ち物", "テスト", "その他"]
+    return [app_commands.Choice(name=c, value=c) for c in candidates if current in c][:25]
 ```
 - `target`・`subject`・`category`のそれぞれに、[00_ユーティリティ関数と_addコマンド.md](00_ユーティリティ関数と_addコマンド.md)で見たものと**全く同じロジック**のオートコンプリートが定義されています。`/add`・`/delete`・`/edit`で同じ種類の候補（科目一覧、カテゴリ候補）を使い回しているにも関わらず、共通関数として切り出さずにそれぞれのコマンドごとに個別定義されている点は、やや重複が見られる箇所です（動作上の問題はありませんが、保守性の観点では1つの共通関数にまとめる余地があります）。
 

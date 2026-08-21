@@ -10,7 +10,17 @@ def _oauth_result_page(success: bool, message: str) -> str:
     color = "#16a34a" if success else "#dc2626"
     icon  = "✓" if success else "✕"
     return f"""<!DOCTYPE html>
-...
+<html lang="ja"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Discord連携</title></head>
+<body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;
+             min-height:100vh;margin:0;background:#f1f5f9;">
+  <div style="background:#fff;border-radius:16px;padding:32px;max-width:360px;width:90%;
+              text-align:center;box-shadow:0 20px 50px rgba(0,0,0,.15);">
+    <div style="font-size:40px;color:{color};margin-bottom:12px;">{icon}</div>
+    <div style="font-size:15px;color:#334155;line-height:1.6;">{message}</div>
+    <div style="font-size:12px;color:#94a3b8;margin-top:16px;">3秒後にStudyLogへ戻ります…</div>
+  </div>
   <script>setTimeout(function() {{ location.href = "https://1istudyweb.pages.dev/StudyLog"; }}, 3000);</script>
 </body></html>"""
 ```
@@ -187,7 +197,11 @@ def discord_reg_info():
     dtoken     = data.get("dtoken")
     student_id = (data.get("student_id") or "").strip().upper()
     nickname   = (data.get("nickname") or "").strip()
-    ...
+
+    if not guild_id or not dtoken or not student_id:
+        return jsonify({"ok": False, "error": "missing fields"})
+
+    guild_id = int(guild_id)
     entry = get_discord_reg_token(dtoken)
     if not entry or entry["guild_id"] != guild_id:
         return jsonify({"ok": False, "error": "reg_token_invalid"})

@@ -11,7 +11,12 @@ def pending_delete_requests():
     （/request_deleteがDiscord未連携でDMを送れなかったケースの受け皿）。
     PendingDeleteCheck.jsがサイトを開くたびに呼び、あれば確認モーダルを出す。"""
     guild_id = request.args.get("guild_id")
-    ...
+    if not guild_id:
+        return jsonify({"ok": False, "error": "missing guild_id"})
+    try:
+        guild_id = int(guild_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "invalid guild_id"})
     student_id, err = require_member_session(session_token_from_request(), guild_id)
     if err:
         return err
