@@ -40,7 +40,7 @@ function requireLoginOrRedirect() {
   return s;
 }
 ```
-- コメントに、[../00_HTML構造とページ全体像.md](../01_index_予定管理.md)のシリーズ最初の記事でも触れた「以前は『匿名のまま投稿しますか？』という確認ダイアログで未ログイン投稿を許していたが、廃止した」という経緯が改めて記録されています。
+- コメントに、[../01_index_予定管理.md](../01_index_予定管理.md)のシリーズ最初の記事でも触れた「以前は『匿名のまま投稿しますか？』という確認ダイアログで未ログイン投稿を許していたが、廃止した」という経緯が改めて記録されています。
 
 ```js
 window.addEventListener('load', () => {
@@ -166,6 +166,24 @@ async function setNoticeDone(filename, nextDone) {
 ```
 - コメントの通り、サーバーの応答を待たずに**先に**見た目を切り替える「楽観的更新」です（[../04_StudyLog/03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](../04_StudyLog/03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)の課題達成が「悲観的更新」だったのとは対照的な選択です。「実行済みチェック」は取り消しが簡単で見た目の即応性が重視される操作、「課題の達成（ポイントが絡む）」は正確さが重視される操作、という違いが設計判断に表れていると考えられます）。もしサーバーへの反映が失敗したら、`n.done = !nextDone`で表示を元に戻し、エラーを伝えます。
 
+```js
+function toggleNoticeDoneFromModal() {
+  if (!currentViewFilename) return;
+  const n = notices.find(x => x.filename === currentViewFilename);
+  if (!n) return;
+  setNoticeDone(currentViewFilename, !n.done);
+}
+
+// 詳細モーダルのボタン表示を、今開いているお知らせの実行済み状態に合わせる
+function updateViewDoneBtn() {
+  const btn = document.getElementById('view-done-btn');
+  if (!btn || !currentViewFilename) return;
+  const n = notices.find(x => x.filename === currentViewFilename);
+  const isDone = !!(n && n.done);
+  btn.innerHTML = isDone ? (Icons.html('check', {size:14}) + ' 実行済み') : '実行済みにする';
+  btn.classList.toggle('is-done', isDone);
+}
+```
 `toggleNoticeDoneFromModal()`／`updateViewDoneBtn()`（254〜269行）は、詳細モーダルの「実行済みにする」ボタンからこの関数を呼ぶための橋渡しと、ボタン自体の見た目（テキスト・色）を今の状態に合わせて更新する関数です。
 
 ---
@@ -273,7 +291,7 @@ function scheduleDraftSave() {
   draftSaveTimer = setTimeout(saveDraftNow, 600);
 }
 ```
-- `scheduleDraftSave()`は、入力欄の`oninput`（[../00_HTML構造とページ全体像.md](../01_index_予定管理.md)の`upload-filename`/`upload-content`）から呼ばれます。[../02_Cardmaker/10_遅延読み込みチャンク_CSVと並び替えと検索.md](../02_Cardmaker/10_遅延読み込みチャンク_CSVと並び替えと検索.md)の検索と同じ**デバウンス**の考え方で、入力のたびに即座に保存するのではなく、最後の入力から0.6秒操作が無ければ保存する、という間引きです。
+- `scheduleDraftSave()`は、入力欄の`oninput`（[../01_index_予定管理.md](../01_index_予定管理.md)の`upload-filename`/`upload-content`）から呼ばれます。[../02_Cardmaker/10_遅延読み込みチャンク_CSVと並び替えと検索.md](../02_Cardmaker/10_遅延読み込みチャンク_CSVと並び替えと検索.md)の検索と同じ**デバウンス**の考え方で、入力のたびに即座に保存するのではなく、最後の入力から0.6秒操作が無ければ保存する、という間引きです。
 
 ```js
 function saveDraftNow() {
@@ -304,8 +322,30 @@ function checkForDraft(key) {
   } catch (e) { document.getElementById('draft-banner').style.display = 'none'; }
 }
 ```
-- モーダルを開くたびに（[01_Notice.js_その2_削除依頼とアップロード編集.md](01_Notice.js_その2_削除依頼とアップロード編集.md)の`openUploadModal`/`openEditModal`から呼ばれます）、対応するキーに下書きが残っていないか確認し、あれば[../00_HTML構造とページ全体像.md](../01_index_予定管理.md)で見た「保存されている下書きがあります」バナーを表示します。
+- モーダルを開くたびに（[01_Notice.js_その2_削除依頼とアップロード編集.md](01_Notice.js_その2_削除依頼とアップロード編集.md)の`openUploadModal`/`openEditModal`から呼ばれます）、対応するキーに下書きが残っていないか確認し、あれば[../01_index_予定管理.md](../01_index_予定管理.md)で見た「保存されている下書きがあります」バナーを表示します。
 
+```js
+function restoreDraft() {
+  if (!pendingDraft) return;
+  document.getElementById('upload-filename').value = pendingDraft.filename || '';
+  document.getElementById('upload-content').value = pendingDraft.content || '';
+  onFilenameInput();
+  document.getElementById('draft-banner').style.display = 'none';
+}
+
+function discardDraft() {
+  const key = isEditingNotice ? draftKeyForEdit(editingOriginalFilename) : DRAFT_KEY_NEW;
+  try { localStorage.removeItem(key); } catch (e) {}
+  pendingDraft = null;
+  document.getElementById('draft-banner').style.display = 'none';
+}
+
+function clearDraftAfterSubmit() {
+  const key = isEditingNotice ? draftKeyForEdit(editingOriginalFilename) : DRAFT_KEY_NEW;
+  try { localStorage.removeItem(key); } catch (e) {}
+  document.getElementById('draft-status').textContent = '';
+}
+```
 `restoreDraft()`（390〜396行）はバナーの「復元する」ボタンから呼ばれ、下書きの内容を入力欄に反映します。`discardDraft()`（398〜403行）は「破棄する」ボタンから、下書き自体を消します。`clearDraftAfterSubmit()`（405〜409行）は、実際に投稿・保存が成功した後に呼ばれ、もう不要になった下書きを片付けます。
 
 ---
