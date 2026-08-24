@@ -1,4 +1,6 @@
-# Cardmaker.js その1：ログイン・データの持ち方・共通ダイアログ（1〜812行）
+# Cardmaker.js その1：ログイン・データの持ち方・共通ダイアログ（1〜830行）
+
+★ 追記（2026/08/24）：右上のアカウント表示をタップ可能にする変更（1.の末尾）で18行増えたため、この行以降の行番号引用はすべて元のコードより18行分うしろにずれている（この章では反映済み）。
 
 [00_HTML構造とページ全体像.md](00_HTML構造とページ全体像.md)の続きです。用語は[01_index_予定管理.md](../01_index_予定管理.md)の「0. ミニ用語辞典」も参照してください。
 
@@ -9,7 +11,7 @@
 
 ---
 
-## 1. ログインとアカウント表示（6〜138行）
+## 1. ログインとアカウント表示（6〜156行）
 
 冒頭は[01_index_予定管理.md](../01_index_予定管理.md)の`Plan.js`とほぼ同じ内容です：`API_BASE`/`GUILD_ID`/`SESSION_KEY`/`LOGIN_PATH`の定義、`getLoginSession()`、開いた瞬間の強制ログイン確認（IIFE）、`renderDrawerAccount()`（ドロワー下部のアカウント表示）。重複する説明は省略し、CardMaker独自の部分だけ説明します。
 
@@ -35,18 +37,31 @@ function applyAccountHeader() {
   }
   if (nicknameEl) nicknameEl.textContent = STUDENT.nickname;
   if (idEl)       idEl.textContent       = STUDENT.id;
+
+  var headerAccountEl = document.querySelector('.header-account');
+  if (headerAccountEl && !headerAccountEl.dataset.clickBound) {
+    headerAccountEl.dataset.clickBound = '1';
+    headerAccountEl.style.cursor = 'pointer';
+    headerAccountEl.title = 'タップしてアカウント設定を開く';
+    headerAccountEl.addEventListener('click', function() {
+      location.href = '/StudyLog.html?openAccount=1';
+    });
+  }
 }
 applyAccountHeader();
 ```
 - 画面右上のアバター・ニックネーム・学籍番号を`STUDENT`の値で埋めます。「念のため」というコメントの通り、本来ここに到達する前にログインチェックで弾かれているはずですが、万が一のための防御的なチェックが入っています。
+- ★ 追記（2026/08/24）：以前はこの右上の表示が見た目だけで押せなかったが、「CardMakerの右上から押して（アカウント設定・共有中のCardMaker共有リンク一覧が）見れるようにしたい」という要望を受け、`.header-account`（アバター＋ニックネーム＋学籍番号をまとめて囲む`<div>`）全体にクリックハンドラを追加した。CardMaker自体はアカウント設定モーダルを持たないため、ドロワー下部のアカウント表示（`renderDrawerAccount()`）の「⚙️ アカウント設定」と同じ遷移先（`/StudyLog.html?openAccount=1`。`StudyLog.js`側がクエリを見て自動でモーダルを開く）へ`location.href`で飛ばすだけの実装。`dataset.clickBound`で二重登録を防いでいるが、`applyAccountHeader()`自体はこのファイルで1回しか呼ばれないため、実質的には保険。
 
-- 108行目、ログアウト確認は`showAppConfirm`（他ページ共通のDialog.js）ではなく`showCmConfirm`（このファイル自身が702行目以降で定義する、CardMaker専用の確認ダイアログ）を使っています。
+- 108行目、ログアウト確認は`showAppConfirm`（他ページ共通のDialog.js）ではなく`showCmConfirm`（このファイル自身が720行目以降で定義する、CardMaker専用の確認ダイアログ）を使っています。
 
 ---
 
-## 2. デッキ・フォルダのデータの持ち方（140〜392行）
+## 2. デッキ・フォルダのデータの持ち方（158〜410行）
 
-### 2.1 保存場所の基本（140〜143行）
+★ 以降、この章（01）が指す行番号は上記の追記（+18行）を反映済みだが、この後に続く02章以降（デッキ一覧・カード編集・学習モード等）の行番号引用は、2026/08/24時点でこの+18行分のズレを反映できていない（未修正）。関数名・変数名で検索する方が確実。
+
+### 2.1 保存場所の基本（158〜161行）
 ```js
 const STORE_KEY = 'cardmaker_decks_v1';
 function loadDecks() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch { return []; } }
@@ -56,7 +71,7 @@ function genId() { return Date.now().toString(36) + Math.random().toString(36).s
 - デッキのデータは`localStorage`（この端末に保存される領域）に丸ごとJSONとして保存されています。サーバーとのやり取りは別に行われますが、**この端末での表示・操作は基本的にこの`localStorage`の中身を見て行われる**という設計です（サーバーと完全同期するのではなく、この端末用のキャッシュとして機能する）。
 - `genId()`は新しいカードやデッキにIDを振るための関数。「今の時刻を36進数の文字列にしたもの」＋「ランダムな文字列」を組み合わせて、ほぼ確実に他とかぶらない文字列を作っています。
 
-### 2.2 フォルダの持ち方（145〜160行）
+### 2.2 フォルダの持ち方（163〜178行）
 ```js
 const FOLDER_CACHE_KEY = 'cardmaker_folders_cache_v1';
 function loadFoldersCache() { try { return JSON.parse(localStorage.getItem(FOLDER_CACHE_KEY)) || []; } catch { return []; } }
@@ -71,7 +86,7 @@ let currentFolderId = null; // null = ルート
 - `QUIZ_ARCHIVE_FOLDER_ID`：「クイズ過去問」という特別なフォルダのID。これはBotのサーバー側と同じ固定値で、名前変更・削除・移動ができない「システムフォルダ」として扱われます（後述のガード処理で保護されています）。
 - `currentFolderId`：今どのフォルダの中を見ているか（`null`なら一番上の階層＝ホーム）。
 
-### 2.3 ホーム画面の並び順（169〜239行）
+### 2.3 ホーム画面の並び順（187〜257行）
 
 デッキ・フォルダをドラッグして並べ替えた順番をどう扱うか、という仕組みです。少し複雑なので、コメントの要点を整理します。
 
@@ -82,7 +97,7 @@ let currentFolderId = null; // null = ルート
 - `applySavedListOrder(items, folderId)`：実際に画面に表示するとき、保存済みの並び順があればその順に並べ替え、まだ並び順に登場していない新しいアイテム（新規作成分など）は末尾に追加します。
 - `cmDragJustEndedAt`／`cmListDragActive`：長押しドラッグ操作中であることを示すフラグ。ドラッグ中に画面の再描画が走ってしまうと、掴んでいた要素が新しく作り直されたDOM（画面の部品）から浮いてしまい、「同じ項目が一時的に2つ表示される」という不具合が起きるため、ドラッグ中は再描画を止めるためのガードとして使われます（詳細は[05_Cardmaker.js_その5_ホーム画面のドラッグ並び替え.md](05_Cardmaker.js_その5_ホーム画面のドラッグ並び替え.md)）。
 
-### 2.4 サーバーとの同期関数（252〜303行）
+### 2.4 サーバーとの同期関数（270〜321行）
 ```js
 async function fetchAndMergeOrder() {
   const controller = new AbortController();
@@ -123,7 +138,7 @@ async function pushSharedOrderToServer(folderId, keys) {
   }
 }
 ```
-- `pushSharedOrderToServer(folderId, keys)`（266〜287行）は`fetchAndMergeOrder()`の逆方向、この端末で決めた並び順のうち共有部分（`isSharedOrderKey`で判定）だけをサーバーに送る関数です。8秒のタイムアウト付きで`/save_order`にPOSTし、成功したらローカルのキャッシュも更新します。
+- `pushSharedOrderToServer(folderId, keys)`（284〜305行）は`fetchAndMergeOrder()`の逆方向、この端末で決めた並び順のうち共有部分（`isSharedOrderKey`で判定）だけをサーバーに送る関数です。8秒のタイムアウト付きで`/save_order`にPOSTし、成功したらローカルのキャッシュも更新します。
 
 ```js
 // ★ サーバーからフォルダ一覧を取得してキャッシュに反映する
@@ -142,9 +157,9 @@ async function fetchAndMergeFolders() {
   return true;
 }
 ```
-- `fetchAndMergeFolders()`（290〜303行）はフォルダ一覧をサーバーから取得してキャッシュに反映する関数。同じくタイムアウト・`no-store`付きです。
+- `fetchAndMergeFolders()`（308〜321行）はフォルダ一覧をサーバーから取得してキャッシュに反映する関数。同じくタイムアウト・`no-store`付きです。
 
-### 2.5 フォルダの階層構造を扱う関数群（305〜392行）
+### 2.5 フォルダの階層構造を扱う関数群（323〜410行）
 
 ここは「木構造（親子関係を持つデータ）を扱うときによく出てくるパターン」の集まりです。
 
@@ -251,7 +266,7 @@ function canMoveDeckTo(deckId, targetFolderId) {
 
 ---
 
-## 3. クイズ用デッキ選択モード（pickMode）（394〜498行）
+## 3. クイズ用デッキ選択モード（pickMode）（412〜516行）
 
 Quiz.htmlの「クイズを作る」→「デッキを選ぶ」から`?pick=quiz`というURLパラメータ付きでCardMakerを開くと、普段のデッキ一覧の見た目のまま、デッキやフォルダをタップして**複数選択**できるモードに切り替わります。
 
@@ -363,7 +378,7 @@ function initPickModeFromUrl() {
 
 ---
 
-## 4. カードデータの共通処理（500〜621行）
+## 4. カードデータの共通処理（518〜639行）
 
 ```js
 function resolveDeckIdFromDragKey(key) {
@@ -403,7 +418,7 @@ function cardKey(c) {
 
 ---
 
-## 5. 多肢選択デッキの「選択肢入力欄」ウィジェット（526〜594行）
+## 5. 多肢選択デッキの「選択肢入力欄」ウィジェット（544〜612行）
 
 このブロックは、カード新規作成フォームとカード編集モーダルの**両方から使い回される共通部品**です。選択肢は2〜5個、正解はチェックボックスで選び、チェックした個数がそのまま「1つだけ＝択一問題」「2つ以上＝複数回答問題」の判定になります（デッキ単位やカード単位で別途モード切り替えを持たない、という設計）。
 
@@ -468,11 +483,11 @@ function removeChoiceRow(prefix, idx) {
   renderChoiceEditorRows(prefix, choices, newCorrect);
 }
 ```
-- `addChoiceRow(prefix)`／`removeChoiceRow(prefix, idx)`（580〜594行）は、それぞれ選択肢を1個追加・削除して`renderChoiceEditorRows`を呼び直す関数です。削除のときは、削除した選択肢より後ろの正解インデックスを1つずつ繰り上げる処理（`correct.filter(i => i !== idx).map(i => i > idx ? i - 1 : i)`）も行っています。
+- `addChoiceRow(prefix)`／`removeChoiceRow(prefix, idx)`（598〜612行）は、それぞれ選択肢を1個追加・削除して`renderChoiceEditorRows`を呼び直す関数です。削除のときは、削除した選択肢より後ろの正解インデックスを1つずつ繰り上げる処理（`correct.filter(i => i !== idx).map(i => i > idx ? i - 1 : i)`）も行っています。
 
 ---
 
-## 6. カード保存前の重複・矛盾チェック（609〜689行）
+## 6. カード保存前の重複・矛盾チェック（627〜707行）
 
 このサイトが「間違った入力を強制的にブロックする」のではなく「気づかせた上で、本人の判断に委ねる」という設計方針を取っている一例です。
 
@@ -531,7 +546,7 @@ async function warnIfDuplicateOrSameCard(deck, q, a, e, excludeIdx = -1) {
 
 ---
 
-## 7. 自作の確認ダイアログ（691〜795行）
+## 7. 自作の確認ダイアログ（709〜813行）
 
 [00_HTML構造とページ全体像.md](00_HTML構造とページ全体像.md)で触れた通り、CardMakerは他ページ共通の`Dialog.js`を使わず、独自にこの3つの関数を持っています。理由はコメントに書かれている通り、「Cardmaker.cssの既存クラスをそのまま流用して動的にモーダルを生成することで、新規CSSを追加せずに他のモーダルと完全に同じ見た目・アニメーションになる」ためです。
 
@@ -644,7 +659,7 @@ function showCmChoiceDialog({ title, desc = '', choices, cancelLabel = 'キャ�
 
 ---
 
-## 8. 画面切り替えの中心：`showScreen()`（797〜809行）
+## 8. 画面切り替えの中心：`showScreen()`（815〜827行）
 
 ```js
 function showScreen(id) {
