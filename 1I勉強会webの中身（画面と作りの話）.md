@@ -15,9 +15,11 @@
 | `ServiceInfo.html` | サービス情報 | Bot/Webのアップデート履歴＋「運用ログ」タブ（前回の記事の話） |
 | `Login.html` | ログイン | Discord OAuth2でのログイン導線 |
 | `DeleteApproval.html` | 削除の確認 | 本人以外がデッキ／お知らせを削除しようとしたときの、DiscordのDMリンク先 |
+| `ShareApproval.html` | 共有の確認 | 本人以外がCardMakerのデッキ共有リンクを発行したがっているときの、DiscordのDMリンク先 |
+| `DeckShare.html` | 共有デッキ閲覧 | CardMakerで発行された共有リンクの閲覧先。ログイン不要・そのデッキ1件だけを閲覧専用で見せる |
 | `TanCheck.html` | 単位チェッカー | 情報工学科1年生向け、評価割合から達成度を計算するツール（後述、少し毛色が違う） |
 
-ドロワーメニュー（左から出てくるナビ）を持つのは上記のうちログインが絡む6ページ（index/Timetable/Cardmaker/Notice/StudyLog/ServiceInfo）で、Quiz.html・Login.html・DeleteApproval.html・TanCheck.htmlは単発の目的ページなのでドロワー自体を持ちません。
+ドロワーメニュー（左から出てくるナビ）を持つのは上記のうちログインが絡む6ページ（index/Timetable/Cardmaker/Notice/StudyLog/ServiceInfo）で、Quiz.html・Login.html・DeleteApproval.html・ShareApproval.html・DeckShare.html・TanCheck.htmlは単発の目的ページなのでドロワー自体を持ちません（`DeckShare.html`はそもそも予定など他の情報を一切見せない設計のため、ドロワーそのものが存在しません）。
 
 ### CardMakerだけ規模が違う
 
