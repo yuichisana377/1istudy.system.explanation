@@ -89,11 +89,13 @@ menu.appendChild(settingsBtn);
 
 ---
 
-## 4. アカウント設定モーダル（342〜512行）
+## 4. アカウント設定モーダル（342〜626行）
 
 このページにしか無い、Discord連携・ニックネーム変更・パスワード変更をまとめた設定画面です。他ページはここへのリンクを持つだけで、実装の本体はここにあります。
 
-### 4.1 モーダルの組み立て：`openAccountModal()`（360〜409行）
+★ 追記（2026/08/24）：CardMakerのデッキ共有リンク機能（[../12_DeckShare/00_解説.md](../12_DeckShare/00_解説.md)参照）の追加に伴い、「自分に関係する共有リンクをここから横断で確認・取り消しできるように」という要望を受け、`openAccountModal()`にセクションを1つ追加した（4.1a節）。以降の行番号は、この追加分（114行）だけ元のコードより後ろにずれている。
+
+### 4.1 モーダルの組み立て：`openAccountModal()`（360〜423行）
 ```js
 function openAccountModal() {
   closeAccountModal(); // 二重生成防止
@@ -136,6 +138,14 @@ function openAccountModal() {
       '</p>' +
       '<button id="sl-acct-oauth-btn" style="width:100%;padding:10px;border:none;border-radius:8px;background:#5865F2;color:#fff;font-size:14px;font-weight:600;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px;">' + Icons.html('link', {size:16}) + ' Discordで連携する</button>' +
       '<div id="sl-acct-oauth-msg" style="font-size:12px;margin-top:6px;text-align:center;"></div>' +
+    '</div>' +
+
+    '<div style="border-top:1px solid #e2e8f0;padding-top:20px;margin-top:20px;">' +
+      '<label style="font-size:13px;font-weight:600;display:block;margin-bottom:6px;">' + Icons.html('cardmaker', {size:14}) + ' CardMakerの共有リンク</label>' +
+      '<p style="font-size:12px;color:#64748b;margin:0 0 10px;">' +
+        '自分が発行した、または自分のデッキが共有されているリンクの一覧です。ここから取り消せます。' +
+      '</p>' +
+      '<div id="sl-acct-shares-list" style="font-size:12.5px;color:#94a3b8;">読み込み中…</div>' +
     '</div>';
 
   overlay.appendChild(box);
@@ -144,12 +154,62 @@ function openAccountModal() {
   document.getElementById("sl-acct-close").onclick  = closeAccountModal;
   document.getElementById("sl-acct-nickname-save").onclick = submitNicknameChange;
   document.getElementById("sl-acct-oauth-btn").onclick     = startDiscordOAuth;
+  loadAccountShares();
 }
 ```
 - 他ページのモーダルのように、あらかじめHTMLに`<div class="modal-bg">`を用意しておくのではなく、**このモーダル全体をJSの実行時に丸ごと`document.createElement`で作って`document.body`に追加**する、という独特な作り方をしています。コメントによれば「以前は専用の『⚙ アカウント』ボタンから開いていたが、現在はヘッダーのニックネーム／学籍番号をタップすることで開く方式に変更した」という経緯があり、その名残でHTML側に定型のモーダル要素が用意されていない、という事情がありそうです。
 - `innerHTML`に直接埋め込んでいる部分（`box.innerHTML = '...'`）でも、`STUDENT.id`のような値は必ず`escapeHtmlSl()`（4.3節、他の`esc()`関数と同じ役割）を通してからテンプレート文字列に埋め込んでいます。
+- 末尾に追加された「CardMakerの共有リンク」セクションは、他のセクション（Discord連携等）と違い**中身が固定の静的HTMLではない**（発行済みリンクの件数は本人ごとに違う）ため、ここでは「読み込み中…」というプレースホルダの`<div id="sl-acct-shares-list">`だけを置き、モーダルをDOMに追加し終えた最後に`loadAccountShares()`を呼んで非同期に埋める、という2段構えにしてあります。
 
-### 4.2 モーダルを閉じる（411〜414行）
+### 4.1a 共有リンク一覧の読み込み・描画・取り消し（425〜524行）
+```js
+async function loadAccountShares() {
+  const wrap = document.getElementById('sl-acct-shares-list');
+  if (!wrap) return;
+  try {
+    const data = await api('/list_my_deck_shares?guild_id=' + GUILD_ID);
+    if (!data || !data.ok) throw new Error();
+    renderAccountShares(data.shares || []);
+  } catch (e) {
+    wrap.textContent = '読み込みに失敗しました。';
+  }
+}
+```
+- [../../1I勉強会bot解説/22_FlaskAPI_デッキ共有リンク/00_共有リンクの発行と取り消し.md](../../1I勉強会bot解説/22_FlaskAPI_デッキ共有リンク/00_共有リンクの発行と取り消し.md)で見た`/list_deck_shares`（1デッキ分だけ）とは別に新設された`/list_my_deck_shares`（ログイン中の本人に関係する共有リンクをデッキ横断でまとめて返す）を叩きます。
+
+```js
+function renderAccountShares(shares) {
+  const wrap = document.getElementById('sl-acct-shares-list');
+  wrap.innerHTML = '';
+  if (!shares.length) { wrap.textContent = '共有中のリンクはありません。'; wrap.style.color = '#94a3b8'; return; }
+  wrap.style.color = '';
+  shares.forEach(s => {
+    const row = document.createElement('div');
+    ...
+    const revokeBtn = document.createElement('button');
+    revokeBtn.textContent = 'このリンクを取り消す';
+    revokeBtn.onclick = () => revokeAccountShare(s.token, row);
+    row.appendChild(revokeBtn);
+    wrap.appendChild(row);
+  });
+}
+```
+- 表示内容（デッキ名・共有した人のニックネーム）は他人の入力を含みうるテキストなので、この関数だけは`openAccountModal()`本体の`escapeHtmlSl()`によるテンプレート文字列組み立てとは違い、**`document.createElement`/`textContent`（DOM API）で1行ずつ組み立てています**（Cardmaker.jsの`renderDeckShareList()`と同じ理由・同じパターン）。
+- `s.is_own_deck`（サーバー側が計算して返すフラグ）で、「自分が発行したリンク」か「自分のデッキを、承認を得た他人が発行したリンク」かによって、メタ情報の文言（「自分が作成」or「◯◯さんが共有」）を出し分けています。
+
+```js
+async function revokeAccountShare(token, rowEl) {
+  const ok = await showAppConfirm({ title: 'このリンクを取り消しますか？', ... , danger: true });
+  if (!ok) return;
+  const data = await api('/revoke_deck_share', { method: 'POST', body: JSON.stringify({ guild_id: GUILD_ID, session_token: SESSION_TOKEN, token: token }) });
+  if (rowEl && rowEl.parentNode) rowEl.parentNode.removeChild(rowEl);
+  ...
+}
+```
+- 取り消し自体は、Cardmaker.jsのデッキ単位の管理モーダルと**同じ`/revoke_deck_share`をそのまま再利用**しています（サーバー側は「そのリンクを作った本人」か「対象デッキの作成者本人」のどちらかを許可する作りなので、呼び出し元がCardMakerのデッキメニューかアカウント設定モーダルかは区別していません）。確認ダイアログは[../01_index_予定管理.md](../01_index_予定管理.md)で紹介した`Dialog.js`の`showAppConfirm`（Cardmaker独自の`showCmConfirm`ではなく、こちらのページ共通のもの）を使っています。
+- 成功したら、リストを丸ごと再取得し直すのではなく`rowEl.remove()`相当の処理でその行だけをDOMから取り除きます（他の行の表示位置ができるだけ変わらないようにするための細かい配慮）。
+
+### 4.2 モーダルを閉じる（525〜528行）
 ```js
 function closeAccountModal() {
   var el = document.getElementById("sl-acct-overlay");
@@ -158,7 +218,7 @@ function closeAccountModal() {
 ```
 - 他ページの`open`/`close`クラスの付け外しとは違い、**要素そのものをDOMから削除**する形で閉じます。`openAccountModal()`の先頭で毎回`closeAccountModal()`を呼んでいるのは、間違って複数回開かれてモーダルが重複生成されるのを防ぐためです。
 
-### 4.3 メッセージ表示（416〜428行）
+### 4.3 メッセージ表示（530〜542行）
 ```js
 function escapeHtmlSl(s) {
   return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -172,7 +232,7 @@ function setAcctMsg(id, msg, isError) {
 ```
 - `escapeHtmlSl`はこのファイル独自の`esc()`相当の関数（[../01_index_予定管理.md](../01_index_予定管理.md)参照）。`setAcctMsg`はモーダル内のメッセージ欄（保存成功・エラーなど）を表示する共通関数で、コメントに「`msg`は常にこのファイル内の固定文字列なので、`innerHTML`で組み立てても安全」とあります（サーバーから返ってくるエラーメッセージをそのまま使っている箇所もあるため、ここは他の慎重な箇所と比べるとやや踏み込んだ扱いです）。
 
-### 4.4 ニックネーム変更：`submitNicknameChange()`（431〜465行）
+### 4.4 ニックネーム変更：`submitNicknameChange()`（545〜579行）
 ```js
 async function submitNicknameChange() {
   var input = document.getElementById("sl-acct-nickname");
@@ -213,7 +273,7 @@ async function submitNicknameChange() {
 - 成功したら、**この端末が持つあらゆる箇所のニックネーム情報**を一度に更新しています：メモリ上の`STUDENT`オブジェクト、`localStorage`に保存されているセッション情報、全ユーザーの名前対応表（`nicknameMap`）、そして画面表示（`applySession()`）とランキング等の再描画（`renderAll()`）。1箇所でも更新し忘れると「新しい名前がヘッダーには反映されたのに、ランキングでは古い名前のまま」というような不整合が起きるため、関連する場所を漏れなく更新する必要があります。
 - `data.error === "not_logged_in"`のときは`forceReLogin()`（4.6節）でセッション切れとして扱われます。
 
-### 4.5 ログアウト（468〜473行）
+### 4.5 ログアウト（582〜587行）
 ```js
 async function doLogout() {
   const ok = await showAppConfirm({ title: "ログアウトしますか？", okLabel: "ログアウト", danger: true });
@@ -224,7 +284,7 @@ async function doLogout() {
 ```
 - [../01_index_予定管理.md](../01_index_予定管理.md)で紹介した`Dialog.js`共通の確認ダイアログ（`showAppConfirm`）を使っています。
 
-### 4.6 セッション切れの強制ログイン画面誘導（478〜482行）
+### 4.6 セッション切れの強制ログイン画面誘導（592〜596行）
 ```js
 async function forceReLogin() {
   localStorage.removeItem(SESSION_KEY);
@@ -234,7 +294,7 @@ async function forceReLogin() {
 ```
 - サーバー側が「このセッションはもう無効です」（`not_logged_in`エラー）と答えたときに、あちこちの通信処理から呼ばれる共通の後処理です。ローカルの古いセッション情報を消してから、一言案内してログイン画面に戻します。
 
-### 4.7 Discord連携の開始：`startDiscordOAuth()`（490〜512行）
+### 4.7 Discord連携の開始：`startDiscordOAuth()`（604〜626行）
 ```js
 async function startDiscordOAuth() {
   var btn = document.getElementById("sl-acct-oauth-btn");
@@ -264,7 +324,7 @@ async function startDiscordOAuth() {
 
 ---
 
-## 5. その他のデータ読み込み関数（514〜634行）
+## 5. その他のデータ読み込み関数（628〜748行）
 
 ```js
 async function loadUsers() {
@@ -313,7 +373,7 @@ async function loadPoints() {
 ```
 - 全員の累計ポイントを取得し、ヘッダーのポイントバッジ（`updatePointDisplay()`、[02_StudyLog.js_その2_ランキングと記録の描画.md](02_StudyLog.js_その2_ランキングと記録の描画.md)で説明）を更新します。
 
-### 5.1 ログを実際に投稿する：`postLog(entry)`（601〜634行）
+### 5.1 ログを実際に投稿する：`postLog(entry)`（721〜748行）
 ```js
 async function postLog(entry) {
   var data;

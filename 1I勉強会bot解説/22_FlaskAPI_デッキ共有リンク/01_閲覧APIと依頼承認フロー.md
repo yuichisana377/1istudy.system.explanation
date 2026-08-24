@@ -1,8 +1,8 @@
-# 共有デッキの閲覧APIと、本人以外からの依頼承認フロー（`bot.py` 5117〜5381行）
+# 共有デッキの閲覧APIと、本人以外からの依頼承認フロー（`bot.py` 5162〜5426行）
 
-前回（[00_共有リンクの発行と取り消し.md](00_共有リンクの発行と取り消し.md)）は共有リンクの発行・一覧・取り消しを見ました。今回は、実際にリンクを開いたときに使われる閲覧API（`/deck_share_info`）と、デッキの作成者本人以外が共有したい場合の依頼〜承認フロー（`/request_deck_share`〜`/respond_deck_share_request`）を見ていきます。仕組み全体は[12_FlaskAPI_削除依頼システム](../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md)の削除確認依頼とほぼ同じ形をしています。
+前回（[00_共有リンクの発行と取り消し.md](00_共有リンクの発行と取り消し.md)）は共有リンクの発行・一覧・取り消し、および全デッキ横断の一覧API（`/list_my_deck_shares`）を見ました。今回は、実際にリンクを開いたときに使われる閲覧API（`/deck_share_info`）と、デッキの作成者本人以外が共有したい場合の依頼〜承認フロー（`/request_deck_share`〜`/respond_deck_share_request`）を見ていきます。仕組み全体は[12_FlaskAPI_削除依頼システム](../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md)の削除確認依頼とほぼ同じ形をしています。
 
-## 1. `/deck_share_info`：ログイン不要の閲覧API（5117〜5146行）
+## 1. `/deck_share_info`：ログイン不要の閲覧API（5162〜5191行）
 
 ```python
 @app.route("/deck_share_info", methods=["GET"])
@@ -37,7 +37,7 @@ def deck_share_info():
 - チェックの順序に注目してください：①`_parse_share_token_guild`でtokenの形式そのものが正しいか（guild_id部分を取り出せるか）→②`deck_shares_{guild_id}.json`の中に一致するエントリがあるか→③取り消し済みでないか→④期限切れでないか→⑤対象のデッキファイルが今も実在するか、の5段階です。存在しない・無効・取り消し済み・期限切れ・デッキ削除済みのどの場合も、理由をそれぞれ違うメッセージで返している点にも注目してください（[../../1I勉強会web解説/12_DeckShare/00_解説.md](../../1I勉強会web解説/12_DeckShare/00_解説.md)で見るDeckShare.htmlは、これをそのままエラー画面に表示します）。
 - レスポンスに含まれるフィールドが**閲覧に必要な最小限**である点も重要です。`get_card_set`（[14_FlaskAPI_CardMaker/01_一覧取得と保存API.md](../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md)）が返す`filename`（内部のファイル名）は含まれていません。これは、共有された側にファイル名という「内部識別子」を渡す必要が無い（渡すと将来的に別のAPIと組み合わせて悪用される余地を増やすだけ）という考え方です。`published_by`（本来の公開者情報）の代わりに`shared_by`（今回のリンクを発行した人のニックネームだけ）を返しているのも同様の理由です。
 
-## 2. `/request_deck_share`：本人以外からの依頼（5148〜5237行）
+## 2. `/request_deck_share`：本人以外からの依頼（5193〜5282行）
 
 ```python
 @app.route("/request_deck_share", methods=["POST"])
@@ -93,7 +93,7 @@ def request_deck_share():
 ```
 - ステートレストークンを発行してDMを送り、失敗したら`pending_share_requests_{guild_id}.json`に控えを残す、という二段構えは[12_FlaskAPI_削除依頼システム](../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md)の`/request_delete`と全く同じパターンです（`except Exception`で理由を問わず全ての送信失敗を同じフォールバックに乗せる方針も含めて）。この控えは`/pending_share_requests`（次項）で拾われ、`PendingShareCheck.js`（[../../1I勉強会web解説/12_DeckShare/00_解説.md](../../1I勉強会web解説/12_DeckShare/00_解説.md)参照。`PendingDeleteCheck.js`と同じ構造の共通スクリプト）が次回サイトを開いたときに確認モーダルを出します。
 
-## 3. `/pending_share_requests`（5239〜5269行）
+## 3. `/pending_share_requests`（5284〜5314行）
 
 ```python
 @app.route("/pending_share_requests", methods=["GET"])
@@ -110,7 +110,7 @@ def pending_share_requests():
 ```
 - `/pending_delete_requests`（[12_FlaskAPI_削除依頼システム/01_承認ページのAPIと結果の反映.md](../12_FlaskAPI_削除依頼システム/01_承認ページのAPIと結果の反映.md)）と全く同じ構造です。ログイン中の本人（`owner_id`が自分と一致するもの）宛の、まだトークンが有効期限内（`SHARE_REQUEST_TOKEN_TTL_SEC`＝14日）の依頼だけを返します。
 
-## 4. `/share_request_info`・`/respond_deck_share_request`（5271〜5380行）
+## 4. `/share_request_info`・`/respond_deck_share_request`（5316〜5425行）
 
 ```python
 @app.route("/share_request_info", methods=["GET"])
