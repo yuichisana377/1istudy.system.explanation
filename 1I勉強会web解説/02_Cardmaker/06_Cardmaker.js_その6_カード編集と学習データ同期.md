@@ -404,6 +404,49 @@ function studyDataDeckKey(deck) {
 
 `fetchAndMergeStudyData()`と`pushStudyDataToServer(path, body)`は、これまで見てきたパターン（`AbortController`でタイムアウト、`cache: 'no-store'`）と同じ考え方の取得・送信用関数です。1点注目すべきなのは：
 
+### 追記（2026/08/26）：送信中に定期同期が割り込んで変更が消える不具合
+
+「わからないボタンを押しても、次のプレイ時にリセットされてしまう」という報告を受けて調査した結果、以下の競合が原因と判明した：
+
+1. `saveUnsureSet()`（[07_Cardmaker.js_その7](07_Cardmaker.js_その7_学習モードとクイズ再生.md)参照）が`pushStudyDataToServer('save_unsure', ...)`を呼ぶが、これは`await`されない“投げっぱなし”の非同期処理。
+2. 一覧画面（`screen-list`）を見ている間は`checkStudyDataUpdate()`（[09_Cardmaker.js_その9](09_Cardmaker.js_その9_数式入力とリアルタイム更新.md)参照）が15秒おきに`fetchAndMergeStudyData()`を呼び、サーバーの内容で`studyDataCache`を**丸ごと上書き**する。
+3. 1の送信がまだサーバーに届く前に2が実行されると、サーバー側はまだ更新されていない（＝わからないマークが付く前の）古い状態を返してくるため、それで上書きされ、直前に押したはずのマークがローカルからも消えてしまう。
+
+`pushStudyDataToServer`が返すPromiseを`_pendingStudyDataPushes`という配列で覚えておき、`fetchAndMergeStudyData()`側で「送信中のものがあれば、それらが片づくまで待ってから取得する」ように修正した：
+
+```js
+let _pendingStudyDataPushes = [];
+
+async function pushStudyDataToServer(path, body) {
+  const session = getLoginSession();
+  if (!session || !session.session_token) return false;
+  const promise = _pushStudyDataToServerImpl(path, body);
+  _pendingStudyDataPushes.push(promise);
+  try {
+    return await promise;
+  } finally {
+    _pendingStudyDataPushes = _pendingStudyDataPushes.filter(p => p !== promise);
+  }
+}
+```
+
+```js
+async function fetchAndMergeStudyData() {
+  const session = getLoginSession();
+  if (!session || !session.session_token) return false;
+  if (_pendingStudyDataPushes.length) {
+    await Promise.allSettled(_pendingStudyDataPushes);
+  }
+  try {
+    ...（以下は変更なし）...
+```
+
+- 実際の送信処理は`_pushStudyDataToServerImpl`という別関数に切り出し、`pushStudyDataToServer`自身はPromiseの登録・後始末だけを担当する形にした（呼び出し元からは今まで通り`pushStudyDataToServer(...)`を呼ぶだけでよく、シグネチャは変えていない）。
+- `Promise.allSettled`を使っているため、送信が失敗した場合でも（成功・失敗を問わず）待ち終わった時点で取得へ進む。送信自体が失敗した場合はサーバー側が更新されないため、結局その回だけは上書きでローカルの変更が失われる可能性が残るが、これは「そもそも送信できていない＝オフライン等の別問題」であり、今回直したかった「送信は成功しているのにタイミングだけで消える」という理不尽な失われ方は解消される。
+- この修正はCardMakerの4択機能とは無関係の、以前からの既存コードに潜んでいたバグだった。
+
+以下は修正前のオリジナル実装（考え方は同じ）：
+
 ```js
 async function fetchAndMergeStudyData() {
   const session = getLoginSession();
@@ -435,9 +478,8 @@ async function fetchAndMergeStudyData() {
 }
 
 // 学習データをサーバーへ送る共通処理（失敗しても操作自体は止めない）
-async function pushStudyDataToServer(path, body) {
+async function _pushStudyDataToServerImpl(path, body) {
   const session = getLoginSession();
-  if (!session || !session.session_token) return false;
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 8000);
