@@ -480,6 +480,115 @@ document.addEventListener('keydown', e => {
 ```
 - PCで学習しているとき、右矢印キーで次のカード、左矢印キーで前のカード、スペースキーで「答えを見る」を操作できます。
 - 学習画面を見ていないとき、モーダルが開いているとき、そして**今まさに入力欄（`INPUT`/`TEXTAREA`）にフォーカスが当たっているとき**は、このショートカットを無効化しています。最後の条件が無いと、自動採点の解答入力欄に文字を打とうとして半角スペースを押しただけで「答えを見る」が誤発火してしまう、といった問題が起きるためです。
+- **（2026/08/26追加）** 自動採点＋「4択にする」モードで、かつ今表示中のカードが実際に4択になっている（`studyChoicesMap`に登録されている）場合は、スペースキーでの`revealAnswer()`（テキスト入力前提の採点）を呼ばない。4択は下記9章の`answerStudyChoice()`（ボタンクリック）でしか答えられないため。
+
+---
+
+## 9. 自動採点＋「4択にする」モード（2026/08/26追加）
+
+「自動採点する（解答入力）」をONにした時だけ、さらに「4択にする（みんなでクイズと同じ形式）」というサブトグルを選べるようにした。ONにすると、解答をテキストで入力する代わりに、[../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md)で解説した「みんなでクイズ」と同じ4択ボタン（`qp-choices`/`qp-choice-btn`のCSSをそのまま流用）で答える形式になる。
+
+### 9-1. トグルの表示制御
+
+```js
+function onAutoGradeToggleChange() {
+  const on = document.getElementById('auto-grade-checkbox').checked;
+  const row = document.getElementById('four-choice-toggle-row');
+  row.style.display = on ? '' : 'none';
+  if (!on) document.getElementById('four-choice-checkbox').checked = false;
+}
+```
+「自動採点する」チェックボックスの`onchange`から呼ばれ、ONの時だけ「4択にする」の行を表示する（自動採点自体がOFFなら4択も意味が無いため）。`onReverseModeToggleChange()`が反転モードON時に自動採点を強制OFFにする箇所でもこの関数を呼び、連動して4択サブトグルも隠すようにしてある。
+
+### 9-2. 選択肢の組み立て：`setupFourChoiceIfNeeded`（デッキ全体を1問題プールに）
+
+`startStudyMode`内、`studyCards`が確定した直後（`renderStudyCard()`を呼ぶ前）に呼ばれる。
+
+```js
+function setupFourChoiceIfNeeded() {
+  studyChoicesMap = new Map();
+  _fourChoiceAiRunToken++;
+  if (!studyFourChoice || !studyCards.length) return;
+
+  const poolByDeck = new Map();
+  function poolFor(deckId) { /* deck.cardsのanswerを重複除去して集める */ }
+
+  studyCards.forEach(card => {
+    const correct = ((studyReverse ? card.question : card.answer) || '').trim();
+    if (!correct) return;
+    const deckId = card.__deckId || studyDeckId;
+    const pool = poolFor(deckId).filter(a => a !== correct);
+    if (pool.length < 3) return; // 答えの異なりが足りないカードは4択にできない
+    studyChoicesMap.set(cardKey(card), buildChoiceEntry(correct, pool));
+  });
+
+  if (studyChoicesMap.size) scheduleFourChoiceAiEnhancement();
+}
+```
+- **選択肢のプールはデッキ単位**（bot.py側`_build_deck_questions`と同じ「答えの異なりが最低3つ必要」という基準）。フォルダをまとめて再生している場合は、カードごとに`card.__deckId`（そのカードが元々属していたデッキ）でプールを切り分ける（フォルダ内の他デッキの解答は混ぜない）。
+- **1問だけ4択にできなくても、その問題だけ通常入力にフォールバックする**：`studyChoicesMap`に登録されなかったカードは、後述の`renderStudyCard()`が自動的に通常の解答入力欄を表示する。デッキ全体を諦めさせるような全体判定（アラート等）はしていない。
+- `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位12件は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。
+- **AIの応答を待たずに即座に学習を始められる**のがポイント。ここで作った4択は同期的（一瞬）に決まるため、`renderStudyCard()`はこの直後にすぐ呼ばれ、プレイヤーを待たせない。
+
+### 9-3. バックグラウンドAI強化：`scheduleFourChoiceAiEnhancement`
+
+```js
+async function scheduleFourChoiceAiEnhancement() {
+  const myToken = _fourChoiceAiRunToken;
+  const session = getLoginSession();
+  if (!session || !session.session_token) return;
+
+  const entries = studyCards.map((card, idx) => ({ idx, key: cardKey(card) }))
+    .filter(e => studyChoicesMap.has(e.key));
+  const BATCH_SIZE = 5;
+  for (let start = 0; start < entries.length; start += BATCH_SIZE) {
+    if (myToken !== _fourChoiceAiRunToken) return;
+    const batch = entries.slice(start, start + BATCH_SIZE);
+    const items = batch.map(e => { /* {i, question, correct, candidates: shortlist} */ });
+    const res = await fetch(`${API_BASE}cardmaker_ai_distractors`, { ... });
+    if (myToken !== _fourChoiceAiRunToken) return;
+    const data = await res.json();
+    if (!data || !data.ok) return; // 以降のバッチも見込みが薄いので打ち切る
+    (data.questions || []).forEach(q => {
+      // studyChoicesMap の該当カードを、AIが選んだ誤答で作り直す
+    });
+  }
+}
+```
+- サーバー側APIは[../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)の`/cardmaker_ai_distractors`（みんなでクイズのAI強化と同じヘルパーを再利用した汎用エンドポイント）。
+- **5問ずつに分割して送る**：CPU動作のローカルAI（`qwen2.5-coder:7b`）は1問あたり十数秒かかることがある（クイズ側で実測済み）ため、デッキ全体を1回のリクエストに詰め込むと最初のカードにすら長時間反映されない。5問ずつ・順番に送ることで、序盤のカードから早く改善結果が反映される。
+- **`_fourChoiceAiRunToken`によるキャンセル**：`setupFourChoiceIfNeeded()`が呼ばれるたび（＝学習をやり直す・別のデッキを始める等）にインクリメントされる。バッチのループ中、送信前後で自分の`myToken`が最新かどうかを確認し、古い学習セッションのために動いていたループはそこで静かに終了する（新しいセッションの`studyChoicesMap`に、前のセッションのAI応答が紛れ込むのを防ぐ）。
+- **失敗時は静かに諦める**：通信エラー・`ai_unavailable`（Ollama未設定）・`ai_failed`のいずれでも、例外を投げたりアラートを出したりせず、それ以降のバッチも打ち切ってそのまま返る。既に`setupFourChoiceIfNeeded()`で組み立てた綴り類似度ベースの4択がそのまま使われ続けるため、学習自体は何の影響も受けない。
+- **未ログインなら最初から呼ばない**：CardMaker自体がページ全体でログイン必須だが、念のためのガード。
+
+### 9-4. 表示・採点：`renderStudyCard`の分岐と`answerStudyChoice`
+
+```js
+const choiceEntry = studyFourChoice ? studyChoicesMap.get(cardKey(c)) : null;
+answerInputWrap.style.display = choiceEntry ? 'none' : '';
+choiceWrap.style.display = choiceEntry ? '' : 'none';
+document.getElementById('reveal-answer-btn').style.display = choiceEntry ? 'none' : '';
+if (choiceEntry) renderStudyChoices(choiceEntry);
+```
+`choiceEntry`が無ければ（4択にできないカードであれば）今まで通りの解答入力欄になる。ある場合は選択肢欄（`study-choice-wrap`）を表示し、「答えを見る」ボタンだけを隠す（`study-reveal-bar`自体は「← 前へ」ボタンのぶんだけ表示したままにする）。
+
+```js
+function answerStudyChoice(idx) {
+  if (studyChoiceAnswered) return;
+  studyChoiceAnswered = true;
+  const entry = studyChoicesMap.get(cardKey(studyCards[studyIdx]));
+  const isCorrect = idx === entry.correctIndex;
+  // 答案パネル表示・○×判定表示・選択肢ボタンの色分け（qp-correct/qp-wrong/qp-dim）は
+  // 一人用選択式クイズ（Cardmaker-quizplay.jsのanswerQuizPlay）と同じ考え方
+  autoMarkUnsureForCard(card, isCorrect);
+  updateUnsureBtn();
+}
+```
+選んだ瞬間に採点まで行う（クイズと同じ「選ぶ＝回答確定」の1ステップ）。正誤判定後の見た目（正解を緑・選んだ誤答を赤・他を薄く）は[06_Cardmaker.js_その6](06_Cardmaker.js_その6_カード編集と学習データ同期.md)のクイズ再生機能と統一している。間違えたら自動で「わからない」にマークする処理は、通常の`gradeCurrentAnswer()`と共通の`autoMarkUnsureForCard()`に切り出した（以前は`gradeCurrentAnswer()`内に直接書かれていた）。
+
+### 9-5. 「続きから」再開への対応
+
+`saveStudyProgress()`が`fourChoice: studyFourChoice`も保存し、`startStudyMode('resume')`側で`studyFourChoice = studyAutoGrade && !!saved.fourChoice`として復元する。ただし`studyChoicesMap`自体（実際の選択肢の中身）は保存されず、再開のたびに`setupFourChoiceIfNeeded()`で新しく組み立て直す（＝再開すると誤答の顔ぶれは毎回変わる。正解・出題順は`saved.order`から復元されるため変わらない）。
 
 ---
 
