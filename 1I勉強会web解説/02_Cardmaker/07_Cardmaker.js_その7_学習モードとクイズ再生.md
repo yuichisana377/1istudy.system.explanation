@@ -518,14 +518,15 @@ function setupFourChoiceIfNeeded() {
     if (!correct) return;
     const deckId = card.__deckId || studyDeckId;
     const pool = poolFor(deckId).filter(a => a !== correct);
-    if (pool.length < 3) return; // 答えの異なりが足りないカードは4択にできない
+    if (pool.length < 6) return; // プールが薄いカードは4択にできない（下記の追記参照）
     studyChoicesMap.set(cardKey(card), buildChoiceEntry(correct, pool));
   });
 
   if (studyChoicesMap.size) scheduleFourChoiceAiEnhancement();
 }
 ```
-- **選択肢のプールはデッキ単位**（bot.py側`_build_deck_questions`と同じ「答えの異なりが最低3つ必要」という基準）。フォルダをまとめて再生している場合は、カードごとに`card.__deckId`（そのカードが元々属していたデッキ）でプールを切り分ける（フォルダ内の他デッキの解答は混ぜない）。
+- **選択肢のプールはデッキ単位**。フォルダをまとめて再生している場合は、カードごとに`card.__deckId`（そのカードが元々属していたデッキ）でプールを切り分ける（フォルダ内の他デッキの解答は混ぜない）。
+- **（2026/08/26追記）プール基準を「答えの異なり3つ」から「6つ」へ引き上げ**：当初はbot.py側`_build_deck_questions`と同じ「不正解3つを選ぶには答えの異なりが最低3つ必要」という数学的な最低ラインをそのまま採用していたが、ちょうど3つしか無い場合は`buildChoiceEntry`のスコアによる選別が一切効かず（3件全部をそのまま誤答にするしかない）、「明らかに関係ない誤答」がそのまま混ざってしまうという指摘を受けた。選ぶ余地（`buildChoiceEntry`の`topPoolSize`上限と同じ6件）が無ければ4択自体を諦め、通常の解答入力にフォールバックするよう厳格化した。
 - **1問だけ4択にできなくても、その問題だけ通常入力にフォールバックする**：`studyChoicesMap`に登録されなかったカードは、後述の`renderStudyCard()`が自動的に通常の解答入力欄を表示する。デッキ全体を諦めさせるような全体判定（アラート等）はしていない。
 - `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位12件は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。
 - **AIの応答を待たずに即座に学習を始められる**のがポイント。ここで作った4択は同期的（一瞬）に決まるため、`renderStudyCard()`はこの直後にすぐ呼ばれ、プレイヤーを待たせない。
@@ -533,6 +534,14 @@ function setupFourChoiceIfNeeded() {
 ### 9-3. バックグラウンドAI強化：`scheduleFourChoiceAiEnhancement`
 
 ```js
+function isDescriptiveAnswerText(s) {
+  if (!s) return false;
+  if (s.length >= 20) return true; // ある程度長い解答は記述系とみなす
+  if (/[。、．，,.!?！？]/.test(s)) return true; // 句読点を含む＝文章の可能性が高い
+  if (/\s/.test(s.trim())) return true; // 単語区切りのスペースを含む＝説明文っぽい
+  return false;
+}
+
 async function scheduleFourChoiceAiEnhancement() {
   const myToken = _fourChoiceAiRunToken;
   const session = getLoginSession();
@@ -540,7 +549,13 @@ async function scheduleFourChoiceAiEnhancement() {
 
   const entries = studyCards.map((card, idx) => ({ idx, key: cardKey(card) }))
     .filter(e => studyChoicesMap.has(e.key));
-  const BATCH_SIZE = 5;
+  // 記述系カードを問い合わせの先頭へ（Array.sortは安定ソート）
+  entries.sort((a, b) => {
+    const ea = studyChoicesMap.get(a.key), eb = studyChoicesMap.get(b.key);
+    return (isDescriptiveAnswerText(ea.choices[ea.correctIndex]) ? 0 : 1)
+         - (isDescriptiveAnswerText(eb.choices[eb.correctIndex]) ? 0 : 1);
+  });
+  const BATCH_SIZE = 3;
   for (let start = 0; start < entries.length; start += BATCH_SIZE) {
     if (myToken !== _fourChoiceAiRunToken) return;
     const batch = entries.slice(start, start + BATCH_SIZE);
@@ -551,12 +566,15 @@ async function scheduleFourChoiceAiEnhancement() {
     if (!data || !data.ok) return; // 以降のバッチも見込みが薄いので打ち切る
     (data.questions || []).forEach(q => {
       // studyChoicesMap の該当カードを、AIが選んだ誤答で作り直す
+      if (q.i === studyIdx && !studyChoiceAnswered) renderStudyChoices(studyChoicesMap.get(key));
     });
   }
 }
 ```
 - サーバー側APIは[../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)の`/cardmaker_ai_distractors`（みんなでクイズのAI強化と同じヘルパーを再利用した汎用エンドポイント）。
-- **5問ずつに分割して送る**：CPU動作のローカルAI（`qwen2.5-coder:7b`）は1問あたり十数秒かかることがある（クイズ側で実測済み）ため、デッキ全体を1回のリクエストに詰め込むと最初のカードにすら長時間反映されない。5問ずつ・順番に送ることで、序盤のカードから早く改善結果が反映される。
+- **（2026/08/26追記）記述系カードをAI問い合わせの先頭に回す**：`isDescriptiveAnswerText()`は、解答が「単語1つ」ではなく「説明文っぽい」（20文字以上・句読点を含む・スペース区切りを含む）かどうかの簡易判定。綴り類似度＋文字数の近さだけの即席4択は、単語同士ならそれなりに機能するが、記述式の解答（文章）だと綴りが近くても意味は無関係、ということが起きやすく「消去法で一目で分かる誤答」が混ざりやすい。AIによる強化の価値がより大きいこの手のカードを、`entries.sort()`で問い合わせ順の先頭へ回す（安定ソートなので、記述系同士・単語系同士それぞれの中では元の出題順を維持する）。
+- **（2026/08/26追記）3問ずつに分割**：当初5問ずつだったが、CPU動作のローカルAI（`qwen2.5-coder:7b`）は1バッチの応答時間がバッチサイズにほぼ比例するため、バッチを小さくするほど先頭付近のカード（＝記述系優先で並べ替え済み）に早く結果が届く。「もっと早く4択に反映してほしい」という要望を受けて3問へ縮小した。
+- **（2026/08/26追記）今表示中のカードはその場で差し替える**：以前は`studyChoicesMap`を更新するだけで、実際の描画は次に`renderStudyCard()`が呼ばれるとき（＝カードを送ったり戻ったりしたとき）まで反映されなかった。プレイヤーがまさに見ている最中のカード（`q.i === studyIdx`）が、まだ回答していない（`!studyChoiceAnswered`）状態でAI応答が届いた場合は、`renderStudyChoices()`をその場で呼び直し、選択肢をすぐに差し替える。既に回答済みのカードは触らない（正誤判定の結果が後から変わって見えると混乱するため）。
 - **`_fourChoiceAiRunToken`によるキャンセル**：`setupFourChoiceIfNeeded()`が呼ばれるたび（＝学習をやり直す・別のデッキを始める等）にインクリメントされる。バッチのループ中、送信前後で自分の`myToken`が最新かどうかを確認し、古い学習セッションのために動いていたループはそこで静かに終了する（新しいセッションの`studyChoicesMap`に、前のセッションのAI応答が紛れ込むのを防ぐ）。
 - **失敗時は静かに諦める**：通信エラー・`ai_unavailable`（Ollama未設定）・`ai_failed`のいずれでも、例外を投げたりアラートを出したりせず、それ以降のバッチも打ち切ってそのまま返る。既に`setupFourChoiceIfNeeded()`で組み立てた綴り類似度ベースの4択がそのまま使われ続けるため、学習自体は何の影響も受けない。
 - **未ログインなら最初から呼ばない**：CardMaker自体がページ全体でログイン必須だが、念のためのガード。
