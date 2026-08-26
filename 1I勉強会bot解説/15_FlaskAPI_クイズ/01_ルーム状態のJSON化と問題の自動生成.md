@@ -299,6 +299,120 @@ def _archive_room_if_needed(room):
 - `room.get("source") != "manual"`… デッキから自動生成されたクイズ（`source == "deck"`）は、元々CardMaker上に存在するデッキそのものなので、改めてアーカイブする必要がありません。オリジナル問題（`source == "manual"`）の場合だけアーカイブします。
 - `room.get("archived")`（既にアーカイブ済みフラグ）… コメントの通り、この関数は「自然に終了した場合」と「ホストが手動で終了させた場合」の**両方の経路から呼ばれる可能性がある**ため、`room["archived"] = True`を立ててから実際の保存処理を呼ぶことで、同じクイズ結果が誤って2つのデッキとして二重に保存されてしまうのを防いでいます。
 
+## 7. ローカルAIによる誤答の強化（2026/08/26追加、`bot.py` 6058〜6063行・6336〜6510行）
+
+「デッキから自動作成」で作られる4択は、上の`_pick_distractors`が**綴りの類似度だけ**で誤答を選んでいるため、綴りは似ていても意味的には全く見当違いな誤答が混ざることがありました。これをサーバー上に立てたローカルAI（Ollama、`qwen2.5-coder:7b`）に判断させ、「意味的にも紛らわしい」誤答へ差し替える仕組みを追加しています（[[local-coder-ai]]と同じOllamaコンテナを流用）。
+
+### 7-1. 有効/無効の切り替えと設定
+
+```python
+OLLAMA_HOST = (os.environ.get("OLLAMA_HOST") or "").strip().rstrip("/")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen2.5-coder:7b"
+QUIZ_AI_TIMEOUT_SEC = 45
+QUIZ_AI_SHORTLIST_SIZE = 12
+```
+- `OLLAMA_HOST`が未設定（開発機など）なら、この機能は**一切動かず**、従来通り`_pick_distractors`だけで誤答が決まります。本番サーバーでは`.env`に`OLLAMA_HOST=http://ollama:11434`を設定し、あらかじめ`docker network connect pythonbot1istudy_default ollama`でBotコンテナ（ネットワーク`pythonbot1istudy_default`）とOllamaコンテナ（元々は`bridge`ネットワークのみ、ホストの`127.0.0.1:11434`にしか公開していない）を同じDockerネットワークに繋いでおく必要があります（ホスト側のポート公開範囲は変更していないので、外部への公開状況は変わりません）。
+
+### 7-2. なぜ`quiz_create`をブロックしないのか
+
+Web側の`quiz_create`はクライアントで12秒のタイムアウトが設定されています（`Quiz.js`の`apiPost('quiz_create', body, 12000)`）。一方ローカルAIはCPU動作でモデルも大きめ（7B）のため、応答に数秒〜数十秒かかることがあります（[[local-coder-ai]]のREADMEに実測あり）。そこで、AIへの問い合わせは`quiz_create`の応答後に**バックグラウンドスレッド**で行い、ルームが「ロビー」状態（ホストが「開始」を押す前、参加者を待っている間）の間だけ裏で差し替えます。
+
+```python
+if source == "deck" and OLLAMA_HOST:
+    Thread(target=_ai_enhance_quiz_room_choices, args=(code, guild_id, deck_filenames), daemon=True).start()
+```
+- `source == "deck"`のときだけ（ホストが手入力した`manual`クイズは対象外＝人が作った問題にAIが手を入れる必要は無い）。
+
+### 7-3. `_ai_enhance_quiz_room_choices`：安全な差し替えのタイミング制御
+
+```python
+def _ai_enhance_quiz_room_choices(code, guild_id, deck_filenames):
+    with QUIZ_ROOMS_LOCK:
+        room = QUIZ_ROOMS.get(code)
+        if room is None or room["state"] != "lobby":
+            return
+        questions = room["questions"]
+    try:
+        improved = _ai_pick_quiz_distractors(questions, guild_id, deck_filenames)
+    except Exception as e:
+        print(f"[WARN] クイズ選択肢のAI強化に失敗しました（既存の選択肢のまま続行）: {e}")
+        return
+    if not improved:
+        return
+    with QUIZ_ROOMS_LOCK:
+        room = QUIZ_ROOMS.get(code)
+        if room is None or room["state"] != "lobby":
+            return
+        room["questions"] = improved
+```
+- AIへの問い合わせの**前後2回**、`room["state"] == "lobby"`であることを確認しています。もしホストがAIの応答を待たずに「開始」してしまい、出題（`question`）や発表（`reveal`）が始まっていたら、`questions`を書き換えるのを中断します。出題中に選択肢の中身が裏で変わってしまうと、既にクライアントへ配信済みの選択肢・正解番号と食い違う不整合が起きるためです。
+- `try/except`で例外を丸ごと握りつぶし、失敗時はログを出すだけで既存の選択肢のまま進行します（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)で見た「アーカイブ失敗してもクイズ進行は止めない」のと同じ、ベストエフォートの考え方）。
+
+### 7-4. `_ai_pick_quiz_distractors`：候補の絞り込み＋AIへの問い合わせ
+
+```python
+def _ai_pick_quiz_distractors(questions, guild_id, deck_filenames):
+    answer_pool = _collect_deck_unique_answers(guild_id, deck_filenames)
+    if len(answer_pool) < 2:
+        return None
+    items = []
+    for i, q in enumerate(questions):
+        correct = q["choices"][q["correct_index"]]
+        candidates = _distractor_shortlist(
+            correct, [a for a in answer_pool if a != correct], QUIZ_AI_SHORTLIST_SIZE
+        )
+        items.append({"i": i, "question": q["question"], "correct": correct, "candidates": candidates})
+    result = _ollama_generate_json(_build_quiz_distractor_prompt(items))
+    ...
+```
+- `_collect_deck_unique_answers`… `_build_deck_questions`と同じデッキ群から、もう一度「解答（answer）の重複無し一覧」を集め直します（クイズ作成時に選ばれた問題だけでなく、デッキ全体の解答を候補プールにするため）。
+- `_distractor_shortlist`… `_pick_distractors`と全く同じ類似度スコア（綴りの類似度70%＋文字数の近さ30%）で並べ替え、**上位12件（`QUIZ_AI_SHORTLIST_SIZE`）だけ**をAIに渡します。全候補をそのまま渡すとプロンプトが膨らみ、CPU動作のAIの応答がさらに遅くなるための絞り込みです。★ 既存の類似度アルゴリズムを「AIに渡す候補の下ごしらえ」として再利用しているのがポイントで、綴りが似た候補の中から**意味的にも紛らわしいものをAIに選ばせる**、という2段構えになっています。
+- 全問題ぶんをまとめて**1回のプロンプト**にして`_ollama_generate_json`に渡します（1問ずつ問い合わせると、CPU動作のAIでは往復回数分だけ遅くなるため）。
+
+### 7-5. プロンプトの設計と「併用」方針（`_build_quiz_distractor_prompt`）
+
+AIには「まずcandidates（綴りが似ている実在の解答）の中から意味的に紛らわしいものを3つ選べ、3つ集まらない場合に限り新しく考えて補ってよい」と指示しています。実在するデッキの解答を優先させているのは、AIに完全に自由作文させると事実として不自然・意味不明な誤答が混ざるリスクがあるためで、綴り類似度による絞り込み候補が十分ある通常のデッキでは、実質的に「候補の中から選ぶ」動作になります。出力は`{"questions": [{"i": 0, "distractors": [...]}, ...]}`というJSON1本のみを指示し、Ollama側の`"format": "json"`オプションと組み合わせて壊れた応答を減らしています。
+
+### 7-6. `_sanitize_ai_distractors`：AI応答の検証
+
+```python
+def _sanitize_ai_distractors(distractors, correct: str):
+    if not isinstance(distractors, list):
+        return None
+    max_len = max(60, len(correct) * 3)
+    cleaned = []
+    seen = {correct.strip()}
+    for d in distractors:
+        text = str(d or "").strip()
+        if not text or len(text) > max_len or text in seen or find_bug_chars(text):
+            continue
+        seen.add(text)
+        cleaned.append(text)
+        if len(cleaned) == 3:
+            break
+    return cleaned if len(cleaned) == 3 else None
+```
+- AIの応答は「JSONとして正しい」ことしか保証されないため（Ollamaの`format: "json"`はJSONとして妥当であることまでしか強制しない）、中身は改めて検証します：文字列であること、空でないこと、正解と異なること（大文字小文字等はそのまま比較）、重複が無いこと、[../02_データ保存基盤/02_設定ファイルと不正文字チェック.md](../02_データ保存基盤/02_設定ファイルと不正文字チェック.md)の`find_bug_chars`で制御文字等を含まないこと、長さが正解の3倍または60文字を超えないこと（AIが長文で暴走するのを防ぐ）。
+- **1問につき、有効な誤答がちょうど3件そろわなければその問題ごと`None`**（＝差し替えず、綴り類似度ベースの元の選択肢のまま）にします。「一部だけ差し替える」のような中途半端な救済はせず、AIの応答が信頼できる問題だけを丸ごと採用する設計です。
+- `_ai_pick_quiz_distractors`の呼び出し元（`new_questions`構築ループ）でも、`pick`が無い（AIがその問題番号を返さなかった）・`_sanitize_ai_distractors`が`None`を返した、のどちらの場合も**その問題は`questions`の元の値のまま**にして`new_questions`に残します。全30問中1問だけAIの応答がおかしくても、他の29問には影響しません。
+
+### 7-7. まとめ図
+
+```
+quiz_create（deck）
+  ├─ _build_deck_questions()  … 従来通り即座に4択を生成（この処理自体は変更なし）
+  ├─ ルームをstate="lobby"で作成し、即クライアントへ応答
+  └─ [OLLAMA_HOST設定時のみ] バックグラウンドスレッドを起動
+       └─ _ai_enhance_quiz_room_choices
+            ├─ state=="lobby" 確認
+            ├─ _ai_pick_quiz_distractors
+            │    ├─ _collect_deck_unique_answers … 解答プールを再収集
+            │    ├─ _distractor_shortlist × 問題数 … 綴り類似度で候補を12件に絞り込み
+            │    ├─ _build_quiz_distractor_prompt → _ollama_generate_json … AIへ一括問い合わせ
+            │    └─ _sanitize_ai_distractors × 問題数 … 応答を検証、問題ごとに採否判定
+            └─ state=="lobby" を再確認してから room["questions"] を差し替え
+```
+
 ---
 
 次は、実際にルームを作成・参加・進行させるAPI群（`/quiz_create`から`/quiz_leave`まで）を解説します。 → [02_ルーム操作API.md](02_ルーム作成と過去問ランキング.md)
