@@ -71,10 +71,16 @@ def _local_write_once(filename, content_obj, expected_sha=None):
         return False, current_sha
 
     encoded = json.dumps(content_obj, ensure_ascii=False, indent=2).encode("utf-8")
-    tmp_path = f"{path}.tmp"
-    with open(tmp_path, "wb") as f:
-        f.write(encoded)
-    os.replace(tmp_path, path)
+    tmp_path = f"{path}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+    try:
+        with open(tmp_path, "wb") as f:
+            f.write(encoded)
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
     return True, _file_sha(encoded)
 ```
 - 1回分の書き込み処理です。関数名の先頭に`_`が付いているのは、内部専用（このあとの`local_put`からしか呼ばれない）だという印です。
@@ -83,6 +89,25 @@ def _local_write_once(filename, content_obj, expected_sha=None):
 - 一致していれば（または`expected_sha`が指定されていなければ＝チェック不要）、実際に書き込みます。
 - `json.dumps(content_obj, ensure_ascii=False, indent=2)`… Pythonのデータを、整形されたJSON文字列に変換します。`ensure_ascii=False`は「日本語をそのまま日本語の文字として保存する」設定（付けないと`あ`のような数値エスケープだらけになり、ファイルを直接開いたときに人間が読めなくなります）。`indent=2`はインデント幅2で整形し、テキストエディタで開いたときに読みやすくするためです。
 - **一時ファイルに書いてから`os.replace`ですり替える**、という書き方（`tmp_path`に書き込んでから本来のパスに置き換える）に注目してください。これは「アトミック（不可分）な書き込み」と呼ばれるテクニックです。もし直接本来のファイルに書き込んでいる途中でサーバーがクラッシュしたら、ファイルの中身が中途半端に壊れてしまいます。一時ファイルへの書き込みが終わった後に`os.replace`で名前を入れ替えるやり方なら、置き換え自体は一瞬で完了するため、「完全に新しい内容」か「完全に元の内容のまま」のどちらかにしかならず、中途半端に壊れた状態になることがありません。
+
+### 追記（2026/08/26）：`tmp_path`が固定名だったための破損バグ
+
+上のコード（`tmp_path = f"{path}.{os.getpid()}.{secrets.token_hex(8)}.tmp"`）は既に修正後のものです。**以前は`tmp_path = f"{path}.tmp"`という固定名**でした。「アトミックな書き込み」という発想自体は正しかったのですが、Flaskは`threaded=True`で複数のリクエストを並行処理するため、**同じファイルへほぼ同時に書き込む2つのリクエストが、この`.tmp`という同じ一時ファイル名を共有してしまう**という見落としがありました。
+
+実際に起きた事故：CardMakerで「わかる率」が実際には誰も「わからない」を付けていないのに0%と表示される不具合の調査から発覚。ある生徒の`study_data_{guild_id}_{student_id}_{hash}.json`が壊れており、`json.loads`が`Extra data: line 59 column 2`で失敗していた。中身を見ると、**正しい（短い）JSONオブジェクトの直後に、別の（長い）JSONの末尾の残骸**（`"mralv8pefhsl"` のような配列要素の断片と、閉じ括弧の並び）がそのまま付着していた。
+
+原因の推定：
+
+1. リクエストAが`path.tmp`を開いて書き込みを始める（例：短い内容）。
+2. その書き込みが終わる前に、ほぼ同時に届いたリクエストBが**同じ`path.tmp`**を`open(..., "wb")`で開く（Pythonの`"wb"`は開いた瞬間にファイルを0バイトへ切り詰める）。
+3. Aが持っているファイルディスクリプタは、Aが最後に書き込んだ位置から続けて書き込もうとするが、その時点で同じinode（実体）はBによって切り詰められてしまっており、AとBの書き込みが同じファイル上で物理的に混ざる。
+4. 混ざった中身のまま、どちらか（あるいは両方）の`os.replace`が実行され、壊れたJSONが本来のパスへ確定してしまう。
+
+`os.replace`自体はOSレベルでアトミックだが、**その前段（一時ファイルへの書き込み）が複数リクエスト間で競合していた**、というのが正しい理解。「一時ファイルに書いてからすり替える」という設計思想は壊れておらず、一時ファイル名を**呼び出しごとに一意**（プロセスID＋ランダムな16進数8バイト）にするだけで、他のリクエストと絶対に衝突しなくなり、修正できた。
+
+**教訓**：「一時ファイル→アトミックにすり替え」というテクニックを使うときは、一時ファイル名も同時に書き込まれうる他の処理と衝突しない一意な名前にすること。`threaded=True`（またはマルチプロセス）で動くサーバーでは、「同じ対象ファイルに対する書き込みが同時に来ることは無い」という前提を置かないこと。
+
+なお、他に同種の破損が起きていないか`DATA_DIR`内の全`.json`ファイルを`json.loads`で検証したところ、実際に壊れていたのはこの1ファイルのみだった。中身は`json.JSONDecoder().raw_decode()`で先頭の正しい部分だけを取り出し、`local_put`（修正後のコード）で書き直して復旧した（幸い、壊れていたのは`unsure`が空・`seen`が5件という内容で、実質的なデータ欠損は無かった）。
 
 ```python
 def local_put(filename, content_obj, sha=None):
