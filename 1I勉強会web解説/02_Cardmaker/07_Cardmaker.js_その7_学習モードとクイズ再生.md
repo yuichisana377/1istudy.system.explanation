@@ -528,7 +528,7 @@ function setupFourChoiceIfNeeded() {
 - **選択肢のプールはデッキ単位**。フォルダをまとめて再生している場合は、カードごとに`card.__deckId`（そのカードが元々属していたデッキ）でプールを切り分ける（フォルダ内の他デッキの解答は混ぜない）。
 - **（2026/08/26追記）プール基準を段階的に厳格化**：当初はbot.py側`_build_deck_questions`と同じ「不正解3つを選ぶには答えの異なりが最低3つ必要」という数学的な最低ラインをそのまま採用していたが、ちょうど3つしか無い場合は`buildChoiceEntry`のスコアによる選別が一切効かず（3件全部をそのまま誤答にするしかない）、「明らかに関係ない誤答」がそのまま混ざってしまうという指摘を受け、まず「6件以上」へ引き上げた。それでもまだ選別の余地が乏しいとの指摘を受け、最終的に**「10件を超える（11件以上）」**へさらに厳しくした。基準を上げるほど対象デッキが絞られる代わりに、4択にできたデッキの候補プールは元々大きくなり、AIに渡す候補（`shortlist`、下記参照）も自然と充実する。
 - **1問だけ4択にできなくても、その問題だけ通常入力にフォールバックする**：`studyChoicesMap`に登録されなかったカードは、後述の`renderStudyCard()`が自動的に通常の解答入力欄を表示する。デッキ全体を諦めさせるような全体判定（アラート等）はしていない。
-- `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位`FOUR_CHOICE_AI_SHORTLIST_SIZE`件（2026/08/26に12→16へ拡大。プール基準の厳格化で対象デッキの候補が元々増えたことに合わせた）は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。サーバー側もこれに合わせて`CARDMAKER_AI_SHORTLIST_SIZE`（16、[03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)参照）という専用定数を新設した（みんなでクイズ側の`QUIZ_AI_SHORTLIST_SIZE`＝12はユーザーの明示的な希望で現状維持のため、共有せず分けてある）。
+- `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位`FOUR_CHOICE_AI_SHORTLIST_SIZE`件（2026/08/26に12→16→**40**へ2段階で拡大。プール基準の厳格化で対象デッキの候補が元々増えたこと、および「綴り類似度の事前絞り込みだけだと、記述式の解答で本当は紛らわしい候補が順位落ちして漏れる」という指摘に合わせた）は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。サーバー側もこれに合わせて`CARDMAKER_AI_SHORTLIST_SIZE`（40、[03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)参照）という専用定数を新設した（みんなでクイズ側の`QUIZ_AI_SHORTLIST_SIZE`＝12はユーザーの明示的な希望で現状維持のため、共有せず分けてある）。
 - **AIの応答を待たずに即座に学習を始められる**のがポイント。ここで作った4択は同期的（一瞬）に決まるため、`renderStudyCard()`はこの直後にすぐ呼ばれ、プレイヤーを待たせない。
 
 ### 9-3. バックグラウンドAI強化：`scheduleFourChoiceAiEnhancement`
@@ -555,10 +555,13 @@ async function scheduleFourChoiceAiEnhancement() {
     return (isDescriptiveAnswerText(ea.choices[ea.correctIndex]) ? 0 : 1)
          - (isDescriptiveAnswerText(eb.choices[eb.correctIndex]) ? 0 : 1);
   });
-  const BATCH_SIZE = 3;
-  for (let start = 0; start < entries.length; start += BATCH_SIZE) {
+  let start = 0, isFirstBatch = true;
+  while (start < entries.length) {
     if (myToken !== _fourChoiceAiRunToken) return;
-    const batch = entries.slice(start, start + BATCH_SIZE);
+    const batchSize = isFirstBatch ? 1 : 3;
+    const batch = entries.slice(start, start + batchSize);
+    start += batchSize;
+    isFirstBatch = false;
     const items = batch.map(e => { /* {i, question, correct, candidates: shortlist} */ });
     const res = await fetch(`${API_BASE}cardmaker_ai_distractors`, { ... });
     if (myToken !== _fourChoiceAiRunToken) return;
@@ -573,7 +576,8 @@ async function scheduleFourChoiceAiEnhancement() {
 ```
 - サーバー側APIは[../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)の`/cardmaker_ai_distractors`（みんなでクイズのAI強化と同じヘルパーを再利用した汎用エンドポイント）。
 - **（2026/08/26追記）記述系カードをAI問い合わせの先頭に回す**：`isDescriptiveAnswerText()`は、解答が「単語1つ」ではなく「説明文っぽい」（20文字以上・句読点を含む・スペース区切りを含む）かどうかの簡易判定。綴り類似度＋文字数の近さだけの即席4択は、単語同士ならそれなりに機能するが、記述式の解答（文章）だと綴りが近くても意味は無関係、ということが起きやすく「消去法で一目で分かる誤答」が混ざりやすい。AIによる強化の価値がより大きいこの手のカードを、`entries.sort()`で問い合わせ順の先頭へ回す（安定ソートなので、記述系同士・単語系同士それぞれの中では元の出題順を維持する）。
-- **（2026/08/26追記）3問ずつに分割**：当初5問ずつだったが、CPU動作のローカルAI（`qwen2.5-coder:7b`）は1バッチの応答時間がバッチサイズにほぼ比例するため、バッチを小さくするほど先頭付近のカード（＝記述系優先で並べ替え済み）に早く結果が届く。「もっと早く4択に反映してほしい」という要望を受けて3問へ縮小した。
+- **（2026/08/26追記）5問→3問→「最初の1問だけ1問ずつ」に段階的に分割**：CPU動作のローカルAI（`qwen2.5-coder:7b`）は1バッチの応答時間がバッチサイズにほぼ比例するため、バッチを小さくするほど先頭付近のカード（＝記述系優先で並べ替え済み）に早く結果が届く。「もっと早く4択に反映してほしい」という要望を受けて段階的に縮小し、最終的には**最初の1件だけバッチサイズ1**（一番乗りの改善結果を最速で届ける）、**2件目以降は3件ずつ**（総リクエスト数と速度のバランス）という構成にした。
+- **実測でわかった限界**：記述式（長文）の解答・候補10件規模という現実的な条件で実測したところ、1問だけの問い合わせでも約35秒かかった（プロンプトのトークン数が解答の長さに比例して増えるため）。CPUのみ・GPU無しという環境の制約によるもので、バッチサイズの調整だけでは超えられない下限にほぼ到達している。「もっと速い軽量モデル（`qwen2.5-coder:3b`）に替える」案も検証したが、7bより**遅く**（57秒 vs 28.6秒）、しかも候補をほぼ丸ごと返すだけで実質的に選別していないという結果になり、見送った（詳細は[03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)参照）。
 - **（2026/08/26追記）今表示中のカードはその場で差し替える**：以前は`studyChoicesMap`を更新するだけで、実際の描画は次に`renderStudyCard()`が呼ばれるとき（＝カードを送ったり戻ったりしたとき）まで反映されなかった。プレイヤーがまさに見ている最中のカード（`q.i === studyIdx`）が、まだ回答していない（`!studyChoiceAnswered`）状態でAI応答が届いた場合は、`renderStudyChoices()`をその場で呼び直し、選択肢をすぐに差し替える。既に回答済みのカードは触らない（正誤判定の結果が後から変わって見えると混乱するため）。
 - **`_fourChoiceAiRunToken`によるキャンセル**：`setupFourChoiceIfNeeded()`が呼ばれるたび（＝学習をやり直す・別のデッキを始める等）にインクリメントされる。バッチのループ中、送信前後で自分の`myToken`が最新かどうかを確認し、古い学習セッションのために動いていたループはそこで静かに終了する（新しいセッションの`studyChoicesMap`に、前のセッションのAI応答が紛れ込むのを防ぐ）。
 - **失敗時は静かに諦める**：通信エラー・`ai_unavailable`（Ollama未設定）・`ai_failed`のいずれでも、例外を投げたりアラートを出したりせず、それ以降のバッチも打ち切ってそのまま返る。既に`setupFourChoiceIfNeeded()`で組み立てた綴り類似度ベースの4択がそのまま使われ続けるため、学習自体は何の影響も受けない。
