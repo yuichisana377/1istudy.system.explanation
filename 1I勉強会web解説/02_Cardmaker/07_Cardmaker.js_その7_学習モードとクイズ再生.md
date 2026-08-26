@@ -531,6 +531,46 @@ function setupFourChoiceIfNeeded() {
 - `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位`FOUR_CHOICE_AI_SHORTLIST_SIZE`件（2026/08/26に12→16→**40**へ2段階で拡大。プール基準の厳格化で対象デッキの候補が元々増えたこと、および「綴り類似度の事前絞り込みだけだと、記述式の解答で本当は紛らわしい候補が順位落ちして漏れる」という指摘に合わせた）は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。サーバー側もこれに合わせて`CARDMAKER_AI_SHORTLIST_SIZE`（40、[03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)参照）という専用定数を新設した（みんなでクイズ側の`QUIZ_AI_SHORTLIST_SIZE`＝12はユーザーの明示的な希望で現状維持のため、共有せず分けてある）。
 - **AIの応答を待たずに即座に学習を始められる**のがポイント。ここで作った4択は同期的（一瞬）に決まるため、`renderStudyCard()`はこの直後にすぐ呼ばれ、プレイヤーを待たせない。
 
+### 9-2b. サーバー事前生成キャッシュの取得：`applyServerChoiceCaches`（2026/08/26追加）
+
+「同じデッキを何人が学習しても、AIの計算がその都度捨てられて無駄になっている」
+という指摘を受け、デッキを「公開」保存したタイミングでサーバー側が
+バックグラウンドで先に選択肢を作っておく仕組み（`four_choice_cache_<filename>.json`、
+[../../1I勉強会bot解説/14_FlaskAPI_CardMaker/04_4択事前生成キャッシュ.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/04_4択事前生成キャッシュ.md)参照）を追加した。
+`setupFourChoiceIfNeeded`は`async`関数になり、`startStudyMode`側も
+`await setupFourChoiceIfNeeded();`と待つように変更した。
+
+```js
+async function setupFourChoiceIfNeeded() {
+  ...（プール構築は変更なし）...
+  if (!studyChoicesMap.size) return;
+
+  const serverCoveredKeys = await applyServerChoiceCaches();
+  scheduleFourChoiceAiEnhancement(serverCoveredKeys);
+}
+
+async function applyServerChoiceCaches() {
+  const covered = new Set();
+  ...
+  for (const deckId of deckIds) {
+    const deck = decks.find(d => d.id === deckId);
+    if (!deck || !deck.filename) continue; // 下書き（未公開）デッキは対象外
+    const res = await fetch(
+      `${API_BASE}cardmaker_choice_cache?guild_id=${GUILD_ID}&filename=${encodeURIComponent(deck.filename)}`,
+      { headers: { 'Authorization': 'Bearer ' + session.session_token }, signal: AbortSignal.timeout(5000) }
+    );
+    const data = await res.json();
+    ...（各カードについて isValidServerDistractors で検証してから studyChoicesMap を上書き、covered に記録）...
+  }
+  return covered;
+}
+```
+- **学習開始が一瞬だけ長くなる**：`await`を挟むため、以前は完全に同期（一瞬）だった学習開始が、サーバーへの問い合わせ1回ぶん（ファイル読み込みだけなので数十〜数百ms程度）だけ待つようになった。その代わり、間に合えば**最初のカードから**AI強化済みの選択肢を使える（ローカルでのAI強化は数十秒かかることがあるのと対照的）。
+- **`isValidServerDistractors`で検証**：サーバーのキャッシュは「デッキ公開時点のスナップショット」に基づくため、その後カードの解答が編集されている可能性がある。正解と重複する・件数が3つそろわない等の場合は使わず、ローカルで組み立てた即席4択のまま残す。
+- **`Authorization: Bearer`ヘッダーで認証**：クエリ文字列にトークンを載せない（`ServiceInfo.js`の`loadSystemLog`や`Cardmaker-quizplay.js`の`quiz_archive_leaderboard`取得と同じ慣習）。
+- **サーバー側で取得できたカードは`covered`に記録し、`scheduleFourChoiceAiEnhancement`へ渡して除外する**：二重にAIへ問い合わせないようにするため（次項参照）。
+- **通信に失敗しても学習は止まらない**：`fetch`が失敗した場合はそのデッキ分だけ諦め（`catch`で握りつぶす）、ローカルの即席4択＋ローカルAI強化に完全にフォールバックする。デッキが「作成中（下書き、filenameが無い）」の場合もサーバー側に事前生成の対象が無いため、最初から問い合わせをスキップする。
+
 ### 9-3. バックグラウンドAI強化：`scheduleFourChoiceAiEnhancement`
 
 ```js
@@ -542,13 +582,14 @@ function isDescriptiveAnswerText(s) {
   return false;
 }
 
-async function scheduleFourChoiceAiEnhancement() {
+// skipKeys: applyServerChoiceCaches()が既にサーバーの事前生成結果で差し替え済みのカードキー一覧
+async function scheduleFourChoiceAiEnhancement(skipKeys) {
   const myToken = _fourChoiceAiRunToken;
   const session = getLoginSession();
   if (!session || !session.session_token) return;
 
   const entries = studyCards.map((card, idx) => ({ idx, key: cardKey(card) }))
-    .filter(e => studyChoicesMap.has(e.key));
+    .filter(e => studyChoicesMap.has(e.key) && !(skipKeys && skipKeys.has(e.key)));
   // 記述系カードを問い合わせの先頭へ（Array.sortは安定ソート）
   entries.sort((a, b) => {
     const ea = studyChoicesMap.get(a.key), eb = studyChoicesMap.get(b.key);
