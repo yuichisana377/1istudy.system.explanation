@@ -681,4 +681,48 @@ function showScreen(id) {
 
 ---
 
+## 追記（2026/08/26）：複数サーバー対応でのローカルキー移行と、そこに潜んでいたデータ消失バグ
+
+上の`STORE_KEY = 'cardmaker_decks_v1'`は複数サーバー対応前の説明で、現在は`` `cardmaker_decks_v1_${GUILD_ID}` ``のようにGUILD_IDでスコープされている（デッキ一覧・フォルダキャッシュ・並び順キャッシュ・学習データキャッシュの計5箇所が同様）。以前使っていた（GUILD_IDが付いていない）キーのデータを引き継ぐため、`migrateGuildScopedLocalKey(oldKey, newKey)`という移行用ヘルパーが各キーの定義直後に呼ばれる：
+
+```js
+function migrateGuildScopedLocalKey(oldKey, newKey) {
+  if (!GUILD_ID) return; // ★ 2026/08/26追加（下記参照）
+  try {
+    if (localStorage.getItem(newKey) === null && localStorage.getItem(oldKey) !== null) {
+      localStorage.setItem(newKey, localStorage.getItem(oldKey));
+      localStorage.removeItem(oldKey);
+    }
+  } catch (e) {}
+}
+const STORE_KEY = `cardmaker_decks_v1_${GUILD_ID}`;
+migrateGuildScopedLocalKey('cardmaker_decks_v1', STORE_KEY);
+```
+
+新キーが空で、旧キーにデータがあれば新キーへコピーし、**旧キーは消す**（1回きりの移行なので、コピーが終わったら不要になる想定）。
+
+### 見つかったバグ：GUILD_ID未確定のまま移行が走り、元データが消えていた
+
+コードレビューで、この関数に`if (!GUILD_ID) return;`という行が無かった（上のコードは修正後）ことによる実データ消失バグが発覚した。ファイル冒頭には：
+
+```js
+const GUILD_ID = (function () { ... return g && g.guild_id ? String(g.guild_id) : null; ... })();
+if (!GUILD_ID) {
+  try { sessionStorage.setItem('post_login_redirect', location.href); } catch (e) {}
+  location.replace('/Login.html');
+}
+```
+
+という「まだサーバーが分かっていない端末はログイン画面へ誘導する」ガードがある。しかし`location.replace(...)`は、ブラウザが実際にページ遷移するまでの間、**同期実行中のこのスクリプトの残りの行を止めない**。そのため、`current_guild`が未設定の端末（例：ブラウザデータの一部クリア、あるいはこの複数サーバー対応より前からの利用者で一度もこの新しいログインフローを通っていない端末）がCardmaker.htmlを直接開くと、`GUILD_ID`は文字列ではなく`null`のまま、ファイル末尾（`STUDY_DATA_CACHE_KEY`まで含め計5箇所）の`migrateGuildScopedLocalKey`呼び出しが**全部実行されてから**ようやくLogin.htmlへ遷移する。
+
+結果、`cardmaker_decks_v1_null`のような壊れたキーへ下書きデッキ等が移行され、しかも**移行元の`cardmaker_decks_v1`は消されてしまう**。その後ログインして本物のGUILD_IDが分かっても、旧キーは既に無いため2度目の移行は起きず、その端末に残っていたローカル限定の下書きデッキ・フォルダキャッシュ・わからないマーク等が`_null`キーの下に迷子になり、二度と読み込まれなくなる。
+
+修正は`migrateGuildScopedLocalKey`の先頭に`if (!GUILD_ID) return;`を追加するだけ（上のコード参照）。GUILD_IDが未確定の間は移行そのものを行わない＝元データにも一切触らないようにした。
+
+### 関連：Notice.jsの下書きキーには移行そのものが無かった
+
+同じ複数サーバー対応で`Notice.js`の下書きキー（`DRAFT_KEY_NEW`・`draftKeyForEdit`）もGUILD_ID付きに変わっていたが、`Cardmaker.js`と違って移行処理自体が入っていなかった（実データを消す上記バグとは違い、単に「旧キーのデータへ二度とたどり着けなくなる」だけの、より軽い症状）。`_migrateNoticeDraftKey`という同種のヘルパー（もちろん最初からGUILD_ID未確定ガード付き）を追加し、`DRAFT_KEY_NEW`は定義直後に、`draftKeyForEdit(originalFilename)`はファイル名ごとに呼ばれるたびに移行を試みるようにした。
+
+---
+
 続きは[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)で、`renderDeckListUI()`の中身（一覧の実際の描画処理）から解説します。

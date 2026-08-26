@@ -653,6 +653,13 @@ function answerStudyChoice(idx) {
 
 `saveStudyProgress()`が`fourChoice: studyFourChoice`も保存し、`startStudyMode('resume')`側で`studyFourChoice = studyAutoGrade && !!saved.fourChoice`として復元する。ただし`studyChoicesMap`自体（実際の選択肢の中身）は保存されず、再開のたびに`setupFourChoiceIfNeeded()`で新しく組み立て直す（＝再開すると誤答の顔ぶれは毎回変わる。正解・出題順は`saved.order`から復元されるため変わらない）。
 
+### 9-6. コードレビューで見つかった細かい修正（2026/08/26）
+
+- **`scheduleFourChoiceAiEnhancement`のトークン再チェック漏れ**：`res.json()`も`await`を挟む処理のため、その間に学習がやり直された（`setupFourChoiceIfNeeded()`が呼ばれ`_fourChoiceAiRunToken`が進んだ）可能性がある。`fetch`直後だけでなく`res.json()`の直後でも`if (myToken !== _fourChoiceAiRunToken) return;`を確認するようにした（無いと、やり直し後の新しい`studyChoicesMap`へ古いセッションのAI応答が紛れ込むことがあった）。
+- **`applyServerChoiceCaches`の並列化**：デッキごとに`for...of`で直列に`await fetch`していたため、フォルダ再生でデッキ数が多いと最悪「デッキ数×5秒」待つ設計になっていた（1デッキなら数百ms程度、というこの節の説明と矛盾する動き方）。`Promise.all`で全デッキぶんを並行取得するよう修正し、待ち時間を「一番遅い1件ぶん」に収めた。
+- **`buildChoiceEntry`のソート効率化**：`[...pool].sort((a, b) => _distractorScore(correct, b) - _distractorScore(correct, a))`は比較のたびにスコアを再計算する（`O(n log n)`回呼ばれる）ため、候補が多い（最大40件）デッキほど無駄が大きい。各候補のスコアを先に1回だけ計算してから並べ替える（decorate-sort-undecorate）方式に変更。学習開始前に同期的に呼ばれる関数なので、体感の学習開始速度に直接影響する。
+- **選択肢欄の防御的クリア**：4択にできないカードへ切り替わったとき、`#study-choices`のDOM（前のカードの選択肢ボタン、`onclick`が前のカードのインデックスに紐づいたまま）を残さずクリアするようにした。現状`choiceWrap`が`display:none`で隠すため実害は無いが、将来この欄を`renderStudyChoices`を経由せず再表示する変更が入った場合に、古いカードの選択肢が誤って押せてしまう事故を防ぐ。
+
 ---
 
 続きは[08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)で、画像の圧縮・回転補正、モーダルの開閉、そして「遅延読み込みチャンク」の仕組み本体を解説します。

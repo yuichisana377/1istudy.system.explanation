@@ -173,15 +173,21 @@ def upload_notice():
                 old_content = f.read()
         except OSError:
             old_content = None
+    tmp_path = f"{path}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     try:
-        tmp_path = f"{path}.tmp"
         with open(tmp_path, "w", encoding="utf-8") as f:
             f.write(content)
         os.replace(tmp_path, path)
     except OSError as e:
         return jsonify({"ok": False, "error": f"local_write_failed: {e}"})
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
 ```
 - お知らせ本文の保存は、これまで見てきたJSONファイルとは違い、`local_put`（JSON形式で保存）ではなく、**プレーンテキストとして直接ファイルに書き込んでいます**（お知らせの中身自体はMarkdown/プレーンテキストなので、JSONに包む必要が無いためです）。ただし、`tmp_path`に書いてから`os.replace`ですり替える、という[../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md](../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md)で見た**アトミックな書き込み**のテクニックは、ここでも同じように使われています。
+- **（2026/08/26追記）`tmp_path`を一意な名前に修正**：以前は`f"{path}.tmp"`という固定名だったため、`_local_write_once`（[00_ファイル読み書きとSHA排他制御.md](../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md)参照）で実際に見つかったのと全く同じ理由（Flaskの`threaded=True`で、同じお知らせへほぼ同時に届いた2つの投稿リクエストが一時ファイルを共有し、内容が混ざって壊れる）で破損する可能性があった。`upload_notice`はこの一時ファイル書き込みを`_local_write_once`とは独立に自前で実装していたため、あちらを直しても連動して直らない別コードだった。プロセスID＋ランダム値で呼び出しごとに一意な一時ファイル名にし、例外時の後始末（`finally`での`os.remove`）も揃えた。
 
 ```python
     meta_change = None

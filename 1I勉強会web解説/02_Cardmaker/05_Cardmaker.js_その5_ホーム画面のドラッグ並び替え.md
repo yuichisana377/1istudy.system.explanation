@@ -179,6 +179,12 @@ cmDragJustEndedAt = Date.now();
 - 共有される項目（フォルダ・公開デッキ）が1件でも含まれていれば、サーバーにも反映します。自分だけの下書きデッキしか動かしていなければ、サーバー通信自体を省略します。
 - 最後に`cmDragJustEndedAt`を記録（[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)の`openFolder`が、指を離した直後の誤クリックを無視するのに使う値）。
 
+### 追記（2026/08/26）：`pushSharedOrderToServer`が定期同期に上書きされる競合の修正
+
+コードレビューで、`pushSharedOrderToServer`にも[06_Cardmaker.js_その6](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の`pushStudyDataToServer`と全く同じ競合バグが見つかった：この関数はサーバーへの送信を待たずに`.then(...)`で結果を扱うだけの“投げっぱなし”寄りの使われ方をしており、一覧画面を見ている間10秒おきに走る`checkOrderUpdate`→`fetchAndMergeOrder`が、送信がサーバーに届く前に割り込むと、まだ反映されていない古い並び順で`sharedOrderCache`を丸ごと上書きしてしまう。指でドラッグして決めた並びが、他の生徒の並び替えを拾いに行っただけの定期同期のせいで一瞬で元に戻って見える、という不具合が起きうる状態だった。
+
+`study_data`側で確立した直し方（送信中のPromiseを`_pendingOrderPushes`に記録し、`fetchAndMergeOrder`側でそれらの完了を待ってから取得する。さらに、取得の通信中に新しい送信が始まっていた場合は上書き自体をスキップする）をそのまま適用した。
+
 ---
 
 ## 4. フォルダの上に重ねると自動で開く（2578〜2669行）

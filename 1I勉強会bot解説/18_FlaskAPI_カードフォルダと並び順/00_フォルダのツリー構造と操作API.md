@@ -197,6 +197,10 @@ def save_folder():
                 # ★「クイズ過去問」フォルダの中身は、その外へ移動できない
                 if _is_in_archive_scope(folders, folder_id) and not _is_in_archive_scope(folders, parent_id):
                     return jsonify({"ok": False, "error": "クイズ過去問フォルダの外には移動できません"})
+                # ★（2026/08/26追記、下記参照）逆方向の抜け道対策
+                if not _is_in_archive_scope(folders, folder_id) and _is_in_archive_scope(folders, parent_id) \
+                        and _folder_subtree_has_non_archive_deck(guild_id, folders, folder_id):
+                    return jsonify({"ok": False, "error": "クイズ過去問フォルダには、みんなでクイズの結果から自動保存されたデッキしか入れられません"})
                 target["parent_id"] = parent_id
             target["name"] = name
         else:
@@ -214,6 +218,24 @@ def save_folder():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)})
 ```
+
+### 追記（2026/08/26）：フォルダ丸ごと移動で「クイズ過去問」制限を回避できる抜け道の修正
+
+`save_cards`は「`quiz_archive`でないデッキは『クイズ過去問』フォルダへ入れられない」を強制しているが、それは**デッキ単体を保存する経路だけ**だった。コードレビューで、通常デッキを含む別のフォルダを`save_folder`で丸ごと「クイズ過去問」フォルダの中へ移動する（＝各デッキ自体は`save_cards`を経由せず、フォルダの`parent_id`だけが書き換わる）と、この制限を素通りできてしまうことが判明した。結果として「フォルダの置き場所だけがクイズ過去問配下、中身は普通に編集できるはずのデッキのまま」という不整合な状態（実際には`save_cards`が場所だけを見て以後の編集を拒否するため、気づかないうちに編集不能になる）が作れてしまっていた。
+
+```python
+def _folder_subtree_has_non_archive_deck(guild_id, folders, folder_id):
+    """folder_id自身、またはその子孫フォルダの中に、quiz_archiveでない
+    デッキが1つでも含まれるかどうか。"""
+    scope_ids = {folder_id} | {f["id"] for f in _folder_descendants(folders, folder_id)}
+    index, _ = load_cards_index(guild_id)
+    if index is None:
+        index = rebuild_cards_index(guild_id)
+    return any(entry.get("folder_id") in scope_ids and not entry.get("quiz_archive") for entry in (index or []))
+```
+
+`cards_index_{guild_id}.json`（[14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)参照）が各デッキの`folder_id`・`quiz_archive`を既に持っているため、移動対象フォルダとその子孫フォルダのidの集合を作り、索引を1回舐めるだけで済む（デッキ本体ファイルを1つずつ開き直す必要が無い）。この関数を`save_folder`の移動チェックに追加し、「外→クイズ過去問フォルダの中」への移動時、中に1つでも通常デッキが含まれていれば拒否するようにした。
+
 - `id`が送られてきたかどうかで、既存フォルダの「改名／移動」か「新規作成」かを1つのAPIで兼ねています（これまでのCRUD系APIと同じパターンです）。
 - **改名・移動の分岐**：`QUIZ_ARCHIVE_FOLDER_ID`自身は、名前も親も変更できないようガードされています（`name != target.get("name") or parent_id != target.get("parent_id")`で「何か実際に変えようとしているか」を確認し、変えようとしていなければ通す＝単なる無変化の保存リクエストまでは拒否しません）。
 - `parent_id != target.get("parent_id"):`（親が実際に変わる場合だけ）に、`_can_move_folder_to`（前述のツリー演算）と`_is_in_archive_scope`（クイズ過去問フォルダの**中のサブフォルダ**を、その外へ出さないための制約）の両方を確認します。
