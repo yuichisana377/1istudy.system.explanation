@@ -518,7 +518,7 @@ function setupFourChoiceIfNeeded() {
     if (!correct) return;
     const deckId = card.__deckId || studyDeckId;
     const pool = poolFor(deckId).filter(a => a !== correct);
-    if (pool.length < 6) return; // プールが薄いカードは4択にできない（下記の追記参照）
+    if (pool.length <= 10) return; // プールが薄いカードは4択にできない（下記の追記参照）
     studyChoicesMap.set(cardKey(card), buildChoiceEntry(correct, pool));
   });
 
@@ -526,9 +526,9 @@ function setupFourChoiceIfNeeded() {
 }
 ```
 - **選択肢のプールはデッキ単位**。フォルダをまとめて再生している場合は、カードごとに`card.__deckId`（そのカードが元々属していたデッキ）でプールを切り分ける（フォルダ内の他デッキの解答は混ぜない）。
-- **（2026/08/26追記）プール基準を「答えの異なり3つ」から「6つ」へ引き上げ**：当初はbot.py側`_build_deck_questions`と同じ「不正解3つを選ぶには答えの異なりが最低3つ必要」という数学的な最低ラインをそのまま採用していたが、ちょうど3つしか無い場合は`buildChoiceEntry`のスコアによる選別が一切効かず（3件全部をそのまま誤答にするしかない）、「明らかに関係ない誤答」がそのまま混ざってしまうという指摘を受けた。選ぶ余地（`buildChoiceEntry`の`topPoolSize`上限と同じ6件）が無ければ4択自体を諦め、通常の解答入力にフォールバックするよう厳格化した。
+- **（2026/08/26追記）プール基準を段階的に厳格化**：当初はbot.py側`_build_deck_questions`と同じ「不正解3つを選ぶには答えの異なりが最低3つ必要」という数学的な最低ラインをそのまま採用していたが、ちょうど3つしか無い場合は`buildChoiceEntry`のスコアによる選別が一切効かず（3件全部をそのまま誤答にするしかない）、「明らかに関係ない誤答」がそのまま混ざってしまうという指摘を受け、まず「6件以上」へ引き上げた。それでもまだ選別の余地が乏しいとの指摘を受け、最終的に**「10件を超える（11件以上）」**へさらに厳しくした。基準を上げるほど対象デッキが絞られる代わりに、4択にできたデッキの候補プールは元々大きくなり、AIに渡す候補（`shortlist`、下記参照）も自然と充実する。
 - **1問だけ4択にできなくても、その問題だけ通常入力にフォールバックする**：`studyChoicesMap`に登録されなかったカードは、後述の`renderStudyCard()`が自動的に通常の解答入力欄を表示する。デッキ全体を諦めさせるような全体判定（アラート等）はしていない。
-- `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位12件は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。
+- `buildChoiceEntry(correct, pool)`は、`_bigramSimilarity`（2文字bigramのDice係数、Python側`difflib.SequenceMatcher.ratio()`の簡易的な代替）と文字数の近さを7:3で組み合わせたスコアで`pool`を並べ替え、上位3〜6件からランダムに3件を誤答として選ぶ（`_pick_distractors`と同じ「上位群からランダムに選ぶことで、正解に対して消去法が効きにくい4択にする」考え方）。上位`FOUR_CHOICE_AI_SHORTLIST_SIZE`件（2026/08/26に12→16へ拡大。プール基準の厳格化で対象デッキの候補が元々増えたことに合わせた）は`shortlist`としてエントリに保持しておき、次項のAI強化に使う。サーバー側もこれに合わせて`CARDMAKER_AI_SHORTLIST_SIZE`（16、[03_AI誤答強化API.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/03_AI誤答強化API.md)参照）という専用定数を新設した（みんなでクイズ側の`QUIZ_AI_SHORTLIST_SIZE`＝12はユーザーの明示的な希望で現状維持のため、共有せず分けてある）。
 - **AIの応答を待たずに即座に学習を始められる**のがポイント。ここで作った4択は同期的（一瞬）に決まるため、`renderStudyCard()`はこの直後にすぐ呼ばれ、プレイヤーを待たせない。
 
 ### 9-3. バックグラウンドAI強化：`scheduleFourChoiceAiEnhancement`
