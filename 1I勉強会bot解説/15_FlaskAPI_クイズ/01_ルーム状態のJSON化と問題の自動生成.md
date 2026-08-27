@@ -5,23 +5,38 @@
 ## 1. 参加者一覧の整形：`_quiz_room_players_json`（4877〜4896行）
 
 ```python
-def _quiz_room_players_json(room, include_correct=False):
-    players = sorted(room["players"].values(), key=lambda p: -p["score"])
+def _quiz_room_players_json(room):
+    players = sorted(room["players"].values(), key=lambda p: (-p["score"], p.get("total_answer_time", 0.0)))
+    return [
+        {"id": p["id"], "nickname": p["nickname"], "color": p["color"], "text_color": p["text_color"], "score": p["score"]}
+        for p in players
+    ]
+```
+- `sorted(..., key=lambda p: (-p["score"], p.get("total_answer_time", 0.0)))`… スコアの**降順**（マイナスを付けることで、通常は昇順のソートを降順に反転させています）で並べ、順位表として使えるようにします。**★ 追加**：タプルの2要素目`total_answer_time`（それまでに回答にかかった時間の合計。押すのが早いほど小さい値）が、スコアが同点だったときのタイブレークです。Pythonのタプル比較は左から順に評価されるため、まず`-p["score"]`（スコア降順）で決着が付き、それでも同じ場合だけ`total_answer_time`（昇順＝速い方が上）で決まります。この一覧はロビー・`"ranking"`（途中経過）画面・最終結果(`"ended"`)で使う「全体順位」です。
+- 以前はこの関数に`include_correct`引数があり、`True`のとき各参加者の「今回の問題に正解したか」まで含めていましたが、**この役割は下記の`_quiz_room_players_json_press_order`という別関数に分離されました**（全体順位の並び順と、reveal中のミニ順位表の並び順が別物になったため。詳しくは次項）。
+
+## 1.5 正解発表中専用の並び順：`_quiz_room_players_json_press_order`（★ 追加）
+
+```python
+def _quiz_room_players_json_press_order(room):
+    def sort_key(p):
+        answered_at = p.get("cur_answered_at")
+        if answered_at is not None:
+            return (0, answered_at)
+        return (1, -p["score"])
+    players = sorted(room["players"].values(), key=sort_key)
     result = []
     for p in players:
-        entry = {"id": p["id"], "nickname": p["nickname"], "color": p["color"], "text_color": p["text_color"], "score": p["score"]}
-        if include_correct:
-            # ★ 正解発表(reveal)中だけ、他の参加者の今回の問題への正誤も見せる。
-            #   出題中(question)にこれを渡すと、まだ発表前の正解がバレてしまうため、
-            #   include_correct=True は reveal のときにしか呼ばない。
-            answered = p["cur_answer"] is not None
-            entry["answered"] = answered
-            entry["correct"] = bool(p["cur_correct"]) if answered else None
-        result.append(entry)
+        answered = p["cur_answer"] is not None
+        result.append({
+            "id": p["id"], "nickname": p["nickname"], "color": p["color"], "text_color": p["text_color"],
+            "score": p["score"], "answered": answered,
+            "correct": bool(p["cur_correct"]) if answered else None,
+        })
     return result
 ```
-- `sorted(..., key=lambda p: -p["score"])`… スコアの**降順**（マイナスを付けることで、通常は昇順のソートを降順に反転させています）で並べ、順位表として使えるようにします。
-- `include_correct`引数… コメントにある通り、これは`True`にすると各参加者の「今回の問題に正解したか」まで含めます。この情報は、正解発表（`reveal`）の段階になって初めて公開してよい情報なので、呼び出し側は`question`（出題中）の段階では絶対に`True`にしないという規律が求められます。この関数自体は「渡された引数に従って情報を含めるかどうか」を判断するだけで、**いつ呼ぶべきかの判断は呼び出し元の責任**という設計です。
+- 正解発表(reveal)中のミニ順位表だけは、全体スコア順ではなく**「その問題に回答したのが早い順（正誤にかかわらず）」**で見せる、というKahoot風の演出の実装です。`sort_key`が返すタプルの1要素目（`0`か`1`）で「回答済みグループ」と「未回答（時間切れ）グループ」に大きく分け、回答済みグループの中では`cur_answered_at`（回答した時刻）の昇順＝早押し順、未回答グループの中はスコア降順で安定させています。
+- `include_correct`（各参加者の今回の問題への正誤）は、この関数を呼ぶこと自体が「reveal中」であることを前提にしているため常に含めます。以前のように呼び出し側が`True`/`False`を選ぶ必要はなくなりました（この関数自体をreveal以外から呼ばない、という規律に一本化されています）。
 
 ## 2. ルーム状態のスナップショット：`_quiz_room_snapshot`（4898〜4951行）
 
@@ -56,6 +71,20 @@ def _quiz_room_snapshot(room, student_id):
 - `"intro"`（「第N問」を見せている段階）では、**まだ問題文や選択肢自体を渡していません**。コメントにある通り「question状態になってから渡せば十分で、渡す情報は少ない方がよい」という、最小限の情報しか渡さない方針です。
 
 ```python
+    elif room["state"] == "ranking":
+        # ★ 追加：正解発表の後、次の問題に進む前に見せる「途中経過」。
+        #   playersは常にスコア順（tie-breakは回答時間の合計）で入っているので、
+        #   そのままフロントで一覧表示・順位変動アニメーションに使える。
+        snap.update({
+            "current_q": room["current_q"],
+            "total_questions": len(room["questions"]),
+            "ranking_started_at": room["ranking_started_at"],
+            "ranking_duration_sec": QUIZ_RANKING_DURATION_SEC,
+        })
+```
+- `"ranking"`（★ 追加）では、専用のフィールドは`current_q`・`total_questions`・開始時刻・表示秒数だけです。肝心の順位一覧は、`snap`の先頭で常にセットされている`"players": _quiz_room_players_json(room)`（スコア順・タイブレーク込み）をそのまま使い回せるため、ここで改めて上書きする必要がありません。
+
+```python
     elif room["state"] in ("question", "reveal"):
         q = room["questions"][room["current_q"]]
         revealed = room["state"] == "reveal"
@@ -65,29 +94,37 @@ def _quiz_room_snapshot(room, student_id):
         #   1プレイヤーとして参加するため、ホストだけ特別扱いはしない。
         if revealed:
             question_payload["correct_index"] = q["correct_index"]
+        # ★ 追加：途中参加でまだ「見学中」の人は、回答受付数・合計人数のどちらにもカウントしない。
+        active_players = [p for p in room["players"].values() if p.get("active_from_q", 0) <= room["current_q"]]
         snap.update({
             "current_q": room["current_q"],
             "total_questions": len(room["questions"]),
             "question": question_payload,
             "question_started_at": room["question_started_at"],
             "time_limit_sec": room["time_limit_sec"],
-            "answered_count": sum(1 for p in room["players"].values() if p["cur_answer"] is not None),
-            "total_players": len(room["players"]),
+            "answered_count": sum(1 for p in active_players if p["cur_answer"] is not None),
+            "total_players": len(active_players),
         })
         if revealed:
             snap["first_correct_nickname"] = room.get("first_correct_nickname")
             snap["reveal_started_at"] = room.get("reveal_started_at")
             snap["reveal_duration_sec"] = QUIZ_REVEAL_DURATION_SEC
-            # ★ 発表中だけ、全員分の正誤(◯×)を含めて players を上書きする
-            snap["players"] = _quiz_room_players_json(room, include_correct=True)
+            # ★ 発表中だけ、押した順（正誤にかかわらず）のミニ順位表に players を上書きする
+            snap["players"] = _quiz_room_players_json_press_order(room)
         player = room["players"].get(student_id)
-        if player is not None and player["cur_answer"] is not None:
-            snap["your_answer"] = player["cur_answer"]
-            if revealed:
-                snap["your_correct"] = bool(player["cur_correct"])
+        if player is not None:
+            if player.get("active_from_q", 0) > room["current_q"]:
+                # ★ 追加：途中参加で今の問題にはまだ混ざれない「見学中」の状態
+                snap["spectating"] = True
+            elif player["cur_answer"] is not None:
+                snap["your_answer"] = player["cur_answer"]
+                if revealed:
+                    snap["your_correct"] = bool(player["cur_correct"])
     return snap
 ```
 - **これがこの関数で最も重要な安全対策です**：`question_payload`には常に`question`（問題文）と`choices`（選択肢）が含まれますが、`correct_index`（正解の番号）は`revealed`（＝`state == "reveal"`）のときだけ含まれます。もしこのガードが無く、出題中から正解番号がレスポンスに含まれていたら、ブラウザの開発者ツールでネットワーク通信の中身を見るだけで、誰でも正解が分かってしまいます（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)の設計方針にあった「正解番号はホストにも発表されるまでは一切渡さない」の実装がここです）。
+- **★ 追加：`active_players`と`spectating`**：途中参加を許可したルームでは、`question`/`reveal`中に参加した人（`active_from_q`が今の`current_q`より大きい人）を、`answered_count`/`total_players`の集計対象から外します。さらに、その本人自身に対するレスポンスにだけ`spectating: true`を含め、フロント側がこれを見て「問題・選択肢の代わりに待機画面を出す」判断ができるようにしています（他の参加者から見た`players`一覧には、見学中かどうかを示すフラグは含まれません＝スコア0のまま普通に参加者として並びます）。
+- **★ 変更：`players`の上書き元**：以前は`revealed`のとき`_quiz_room_players_json(room, include_correct=True)`（全体スコア順のまま、正誤情報だけ足す）でしたが、今は`_quiz_room_players_json_press_order(room)`（押した順に並べ替えたうえで正誤情報を含める）に変わりました。全体のスコア順位を見せる場面は`"ranking"`画面・最終結果に分離されたため、reveal中のミニ順位表は「このKahoot的な演出専用の並び順」に特化しています。
 - `revealed`のときだけ`_quiz_room_players_json(room, include_correct=True)`で`players`を**上書き**しています。これにより、正解発表の瞬間だけ、他の参加者の正誤（◯×）が一覧に反映されます。
 - `player["cur_answer"]`（**自分自身**の回答）は、`revealed`かどうかに関わらず渡されます。自分が何を選んだかは、他の参加者に隠す必要が無い（自分自身の情報だから）ためです。ただし、自分の回答が「正解だったかどうか」（`your_correct`）は、他の参加者の正誤と同様に`revealed`のときだけ渡されます。
 

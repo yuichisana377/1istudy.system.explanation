@@ -59,10 +59,11 @@ function renderRoom(room) {
   else if (room.state === 'intro') { renderIntro(room); }
   else if (room.state === 'question' || room.state === 'reveal') {
     if (isHost) renderHostPlay(room); else renderPlayerPlay(room);
-  } else if (room.state === 'ended') { renderResult(room); }
+  } else if (room.state === 'ranking') { renderRanking(room); }
+  else if (room.state === 'ended') { renderResult(room); }
 }
 ```
-- サーバーが管理する`room.state`（このルームが今どの段階にあるか）を見て、対応する描画関数に振り分けるだけの、シンプルな「状態遷移に応じた描画」です。**進行のロジック自体（いつ次の状態に移るか）はすべてサーバー側が担当**しており、クライアント側は「今の状態をそのまま描画する」ことに徹しています。これは、[../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md](../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md)などで見た「サーバーを正とする」設計方針を、ゲーム進行という文脈でも一貫して適用したものです。
+- サーバーが管理する`room.state`（このルームが今どの段階にあるか）を見て、対応する描画関数に振り分けるだけの、シンプルな「状態遷移に応じた描画」です。**進行のロジック自体（いつ次の状態に移るか）はすべてサーバー側が担当**しており、クライアント側は「今の状態をそのまま描画する」ことに徹しています。これは、[../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md](../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md)などで見た「サーバーを正とする」設計方針を、ゲーム進行という文脈でも一貫して適用したものです。★ 追加：`"ranking"`（正解発表と次の問題の間に挟む、スコア順の途中経過）の分岐が増えました。詳しくは8節で解説します。
 
 ### 2.1 カウントダウン画面（643〜661行）
 ```js
@@ -193,8 +194,8 @@ if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dat
   const revealPanel = document.getElementById(revealPanelId);
   if (room.state === 'reveal') {
     revealPanel.style.display = '';
-    document.getElementById(firstBadgeId).textContent = room.first_correct_nickname
-      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M13 3 4 14h6l-1 7 9-11h-6Z"/></svg> 一番早く正解：${room.first_correct_nickname} さん（+2点ボーナス）`
+    document.getElementById(firstBadgeId).innerHTML = room.first_correct_nickname
+      ? `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M13 3 4 14h6l-1 7 9-11h-6Z"/></svg> 一番早く正解：${escapeHtml(room.first_correct_nickname)} さん（+2点ボーナス）`
       : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M13 3 4 14h6l-1 7 9-11h-6Z"/></svg> 正解者はいませんでした';
     document.getElementById(leaderboardId).innerHTML = miniLeaderboardHtml(room.players);
   } else {
@@ -204,8 +205,8 @@ if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dat
   updateTimerBarFor(room, timerbarId);
 }
 ```
-※ `document.getElementById(firstBadgeId).textContent = ...`という代入は、実際のソースコードでもこの通り`textContent`（`innerHTML`ではない）になっています。値の中身にSVGタグの文字列が含まれていますが、`textContent`への代入なのでタグはそのまま文字として表示されてしまいます（実装上の細かな不整合であり、このドキュメントではソースコードをそのまま転記しています）。
 - コメントに「以前はホスト画面だけに『一番早く正解した人』とミニ順位表を表示していた。参加者にはホストと同じ情報を見せていなかったため、ホスト・参加者共通のこの関数から両方の画面を描画するようにする」という改善の経緯があります。
+- ★ 修正（2026/08/27）：`firstBadgeId`への代入は、以前このドキュメントの旧版では`textContent`と誤って転記されていましたが、実際には`innerHTML`です（`textContent`のままだとSVGタグがそのまま文字として表示されてしまうバグが実際にあり、修正済みです）。あわせて`first_correct_nickname`（ニックネーム）も`escapeHtml()`を通すよう修正されています。
 
 ```js
 // ★ 修正：正解発表(reveal)中は、サーバーが players に answered/correct を
@@ -231,6 +232,7 @@ function quizMarkHtml(p) {
 }
 ```
 - 上位5人だけに絞ったミニ順位表を、各参加者の◯×付きで表示します。コメントに「正解発表(reveal)中は、サーバーが`players`に`answered`/`correct`を含めて返すようになった」とあり、出題中はこの情報自体が送られてこないため、`quizMarkHtml`はその場合何も表示しません（`p.correct`が`undefined`かどうかで判定）。
+- ★ 変更（2026/08/27）：ここで並んでいる`players`は、以前はスコア降順でしたが、サーバー側（[../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md)の`_quiz_room_players_json_press_order`）で「その問題に回答したのが早い順（正誤にかかわらず）」に並べ替えられたものが送られてくるようになりました。クライアント側の`miniLeaderboardHtml`自体は`players.slice(0, 5)`で受け取った順にそのまま表示するだけなので、コードに変更はありません（サーバー側の並び順を変えるだけで見た目が変わる、「サーバーを正とする」設計の一例です）。全体のスコア順位は、次の問題までの間に挟まる`"ranking"`画面（8節）・最終結果（6節）の方で見せます。
 
 ---
 
@@ -350,18 +352,23 @@ async function confirmQuitPlayer() {
 }
 ```
 `hostStart()`（902〜909行）はロビーからクイズを開始するホスト専用の操作、`confirmQuitHost()`/`confirmQuitPlayer()`（910〜937行）はそれぞれホスト・参加者が確認ダイアログのあとクイズから抜ける処理です。`quitting`フラグで、確認ダイアログを閉じている間の二重実行を防いでいます。
+- ★ 追加（2026/08/27）：`confirmQuitPlayer()`自体は元からありましたが、呼び出せるボタンは以前ロビー画面（`#screen-player-lobby`）にしかなく、出題が始まってしまうと参加者は退出できませんでした。出題画面（`#screen-player-play`）のヘッダーにも同じボタンを追加し、対戦中いつでも退出できるようにしました（ホスト用の出題画面には元々`confirmQuitHost()`ボタンがありました）。
 
 ---
 
 ## 6. 結果発表：`renderResult(room)`（942〜965行）
 
 ```js
-const sorted = [...room.players].sort((a, b) => b.score - a.score);
+// ★ 修正（2026/08/27）：room.playersはサーバー側で既にスコア降順（同点は
+//   回答時間合計が短い方が上）に並べ済みなので、ここで再ソートしない。
+const sorted = room.players;
 const podiumOrder = [sorted[1], sorted[0], sorted[2]]; // 2位・1位・3位の順で表示（真ん中が1位）
+// ★ 修正（2026/08/27）：金・銀・銅が同じ形のアイコンを色だけ変えて表示していたため
+//   「全部1位に見える」という指摘があった。線画から塗りつぶしに変え、色もはっきり離した。
 const medalMap = [
-  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#c0c0c0" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><path d="M12 12v6"/></svg>`, // 銀
-  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#eab308" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><path d="M12 12v6"/></svg>`, // 金
-  `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#b45309" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><path d="M12 12v6"/></svg>`, // 銅
+  `<svg width="18" height="18" viewBox="0 0 24 24" fill="#94a3b8" stroke="#fff" stroke-width="1.3" ...>...</svg>`, // 銀（明度を落とした濃いグレー）
+  `<svg width="18" height="18" viewBox="0 0 24 24" fill="#f5b400" stroke="#fff" stroke-width="1.3" ...>...</svg>`, // 金
+  `<svg width="18" height="18" viewBox="0 0 24 24" fill="#c2703d" stroke="#fff" stroke-width="1.3" ...>...</svg>`, // 銅（彩度を上げた銅色）
 ];
 const podiumClass = ['qz-podium-2', 'qz-podium-1', 'qz-podium-3'];
 document.getElementById('result-podium').innerHTML = podiumOrder.map((p, i) => {
@@ -373,15 +380,18 @@ document.getElementById('result-podium').innerHTML = podiumOrder.map((p, i) => {
       <div class="qz-podium-bar"><span class="qz-podium-medal">${medalMap[i]}</span></div>
     </div>`;
 }).join('');
+// ★ 追加：自分の行をひと目で分かるようにハイライトする
 document.getElementById('result-list').innerHTML = sorted.map((p, i) => `
-  <div class="qz-lb-row">
+  <div class="qz-lb-row${p.id === STUDENT.id ? ' qz-lb-row-me' : ''}">
     <span class="qz-lb-rank">${i + 1}</span>
     <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
     <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
     <span class="qz-lb-score">${p.score}点</span>
   </div>`).join('');
 ```
-- 得点降順に並べたあと、表彰台の見た目（左に2位、真ん中に1位、右に3位、という一般的な表彰台のレイアウト）に合わせて並び替えています。参加者が2人以下の場合、`sorted[2]`（3位）は`undefined`になりますが、`podiumOrder.map`内の`if (!p) return ...`分岐で、存在しない順位は空の列（メダル無しの空の`<div>`）として描画され、エラーにはなりません。
+- 表彰台の見た目（左に2位、真ん中に1位、右に3位、という一般的な表彰台のレイアウト）に合わせて並び替えています。参加者が2人以下の場合、`sorted[2]`（3位）は`undefined`になりますが、`podiumOrder.map`内の`if (!p) return ...`分岐で、存在しない順位は空の列（メダル無しの空の`<div>`）として描画され、エラーにはなりません。
+- ★ 修正（2026/08/27）：以前は`[...room.players].sort((a, b) => b.score - a.score)`とスコアだけで**クライアント側が独自に再ソート**していましたが、これだとサーバー側が同点タイブレーク（回答時間の合計）まで含めて並べ替えた順番が、ここで台無しになってしまっていました。サーバー側の並び順をそのまま信用する（`const sorted = room.players;`）ように直し、`renderPlayScreen`のミニ順位表（3.5節）と同じ「サーバーを正とする」設計に統一しました。
+- ★ 追加：自分の行に`qz-lb-row-me`クラスを付け、色を変えてひと目で分かるようにしました。
 
 `document.getElementById('result-list')`には、上位に限らず**全参加者**の順位・得点を一覧表示します。
 
@@ -394,6 +404,89 @@ initQuizApp();
 hideLoadingFallback();
 ```
 - [00_HTML構造とその1_起動と参加画面.md](00_HTML構造とその1_起動と参加画面.md)で説明した起動処理を実際に呼び出し、最後に「読み込み中…」保険オーバーレイを消します。
+
+---
+
+## 8. 追記（2026/08/27）：途中経過ランキング画面・途中参加の見学待機・レイアウト修正
+
+ユーザーから「Kahootのように、正解発表の後に順位の上げ下げをアニメーションで見せてほしい」「途中参加は次の問題から」「タイマーがスクロールしないと見えない」等、複数の要望を受けてまとめて対応しました。
+
+### 8.1 途中経過画面：`renderRanking(room)`（新規）
+
+```js
+function renderRanking(room) {
+  showScreenQ('ranking');
+  const listEl = document.getElementById('rk-list');
+
+  const myIndex = room.players.findIndex(p => p.id === STUDENT.id);
+  document.getElementById('rk-my-rank').textContent = myIndex !== -1
+    ? `あなたは 現在 ${myIndex + 1}位 / ${room.players.length}人中`
+    : '';
+
+  const firstTops = {}; // First：描画し直す前の各行の位置
+  [...listEl.children].forEach(row => {
+    firstTops[row.dataset.playerId] = row.getBoundingClientRect().top;
+  });
+
+  listEl.innerHTML = room.players.map((p, i) => `
+    <div class="qz-lb-row${p.id === STUDENT.id ? ' qz-lb-row-me' : ''}" data-player-id="${p.id}">
+      <span class="qz-lb-rank">${i + 1}</span>
+      <span class="qz-avatar" ...>${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
+      <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
+      <span class="qz-lb-score">${p.score}点</span>
+    </div>`).join('');
+
+  const myRow = listEl.querySelector('.qz-lb-row-me');
+  if (myRow) myRow.scrollIntoView({ block: 'nearest' });
+
+  if (!Object.keys(firstTops).length) return; // 初回（1問目終了後）は前回位置が無いのでアニメーションなしで出す
+
+  const rows = [...listEl.children];
+  rows.forEach(row => {
+    const oldTop = firstTops[row.dataset.playerId];
+    if (oldTop === undefined) return;
+    const delta = oldTop - row.getBoundingClientRect().top;
+    if (!delta) return;
+    row.style.transition = 'none';
+    row.style.transform = `translateY(${delta}px)`;
+  });
+  void listEl.offsetHeight; // 強制リフローでtransformを確定させてから外す
+  rows.forEach(row => {
+    row.style.transition = 'transform .5s cubic-bezier(.2,.8,.2,1)';
+    row.style.transform = '';
+  });
+}
+```
+- サーバー側の`room.players`は既にスコア降順（同点タイブレーク込み）で並んでいるので、そのまま`i + 1`を順位として表示するだけです。
+- 順位変動のアニメーションは**FLIP手法**（First・Last・Invert・Play）で実装しています。①（First）DOMを描画し直す**前**に、既存の各行（`data-player-id`で識別）の画面上の位置を`getBoundingClientRect().top`で記録する → ②（Last）新しい順位でDOMを丸ごと作り直す → ③（Invert）各行について「新しい位置」と「元の位置」の差分（`delta`）を計算し、`transform: translateY(delta px)`で**わざと元の位置に見えるようにずらす**（この時点では`transition: none`でアニメーションさせない） → ④ `void listEl.offsetHeight`で強制リフローし、ブラウザに③のズレを一旦確定させる → ⑤（Play）`transition`を有効にしてから`transform`を`''`（本来の新しい位置）に戻す、という流れです。⑤の瞬間、ブラウザは「ズレた位置」から「本来の位置」へ**トランジションで滑らかに動かして**くれます。DOM要素自体は既に新しい位置にあるのに、見た目だけ一瞬「前の位置にいた」ように偽装してから正しい位置へアニメーションさせる、という考え方がFLIPの核心です。
+- 1問目終了後の最初の`"ranking"`画面には「前回の位置」がまだ無い（`listEl`が空）ため、`firstTops`が空のまま`return`し、アニメーション無しでそのまま表示します。新規途中参加者などその回だけ現れた行も、`firstTops[id]`が`undefined`になるため個別にアニメーション対象から外れます。
+- `rk-my-rank`（新規要素）に「あなたは現在◯位/N人中」を表示し、自分の行には`qz-lb-row-me`クラスでハイライトを付けます。一覧が参加者過多で内部スクロールする場合に自分の行が隠れたままにならないよう、`scrollIntoView({ block: 'nearest' })`で必要な時だけ表示範囲に入れます。
+
+### 8.2 途中参加でまだ見学中の場合：`renderPlayScreen`の`spectating`分岐（追加）
+
+```js
+if (room.spectating) {
+  if (spectateNote) spectateNote.style.display = '';
+  document.getElementById(questionId).textContent = '';
+  document.getElementById(choicesId).innerHTML = '';
+  document.getElementById(choicesId).dataset.built = '';
+  document.getElementById(feedbackId).style.display = 'none';
+  document.getElementById(waitingNoteId).style.display = 'none';
+  document.getElementById(revealPanelId).style.display = 'none';
+  document.getElementById(answeredCountId).textContent = '';
+  const timerEl = document.getElementById(timerbarId);
+  delete timerEl.dataset.startedAt; delete timerEl.dataset.limit;
+  timerEl.style.transform = 'scaleX(0)';
+  return;
+}
+```
+- サーバー側（[../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md)参照）が、途中参加でまだこの問題に混ざれない本人にだけ`room.spectating: true`を返すようになったのを受けて、通常の問題・選択肢の描画をすべて`return`で打ち切り、代わりに専用の案内（`#pp-spectate-note`「待機中…（次の問題から参加します）」）だけを表示します。タイマーバーの`dataset`も消してから幅を0にし、直前の問題の残り時間表示が変な形で残らないようにしています。ホストは常に`active_from_q: 0`（最初からアクティブ）なので、この分岐に入ることはありません（`renderHostPlay`は`spectateNoteId`を渡していません）。
+
+### 8.3 表彰台のメダルアイコン（6節の再掲）・待機画面のアイコン・レイアウトの修正
+
+- 6節で触れた通り、表彰台のメダルアイコンを線画（色違いだけ）から塗りつぶし＋色をよりはっきり離したものに変更しました。
+- 参加者ロビー画面（`#screen-player-lobby`）の待機中アイコンだった絵文字`⏳`は、[../02_Cardmaker/00_HTML構造とページ全体像.md](../02_Cardmaker/00_HTML構造とページ全体像.md)等で触れられている「見た目はOSの標準UI・絵文字に頼らない」という全ページ共通方針からこの画面だけ漏れていたため、`Icons.js`の`timer`アイコンと同じ形のSVGに置き換え、`qzBreathe`（ゆっくり明滅・拡大縮小する）アニメーションを付けました。
+- 出題画面（`#screen-host-play`/`#screen-player-play`）・途中経過画面（`#screen-ranking`）は、タイマーバー等がページの高さの都合でスクロールしないと見えないことがあったため、`height:100dvh; overflow:hidden`で画面ぴったりに収め、ページ自体のスクロールを止めました。途中経過の参加者一覧だけは、人数が多く入りきらない場合に備えて`.qz-scroll-list`（`overflow-y:auto`）で中身だけスクロールできるようにしています。
 
 ---
 

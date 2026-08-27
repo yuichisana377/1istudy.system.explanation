@@ -71,9 +71,18 @@ def quiz_join():
             if room["state"] != "lobby" and not room.get("allow_late_join"):
                 return jsonify({"ok": False, "error": "quiz_already_started"})
             color, text_color = _quiz_palette_for(student_id)
+            # ★ 追加：途中参加は「今まさに出題・発表中の問題」には混ぜず、次の問題から
+            #   アクティブにする（countdown/introの間はまだ制限時間が始まっていないので、
+            #   今の問題からそのまま参加できる）。
+            if room["state"] in ("question", "reveal", "ranking"):
+                active_from_q = room["current_q"] + 1
+            else:
+                active_from_q = room["current_q"]
             room["players"][student_id] = {
                 "id": student_id, "nickname": nickname, "color": color, "text_color": text_color,
                 "score": 0, "cur_answer": None, "cur_correct": None,
+                "cur_answered_at": None, "total_answer_time": 0.0,
+                "active_from_q": active_from_q,
             }
         room["last_activity"] = now
         _quiz_autoadvance_locked(room, now)
@@ -82,7 +91,8 @@ def quiz_join():
     return jsonify({"ok": True, "is_host": is_host, "room": snap, "server_now": int(now * 1000)})
 ```
 - `is_host`（ホスト自身か）や、`student_id in room["players"]`（既に参加済みか）であれば、新しく追加する処理はスキップされます（同じ人が何度参加操作を行っても、二重に登録されることはありません）。
-- コメントにある通り、新規参加を許可する条件は「`lobby`中は誰でも参加可能」「開始後（`question`/`reveal`）は、ホストが`allow_late_join`を許可していた場合のみ」「終了後（`ended`）はどちらの場合も参加不可」です。この3条件が、上のコードの2つの`if`文にそのまま対応しています。
+- コメントにある通り、新規参加を許可する条件は「`lobby`中は誰でも参加可能」「開始後（`question`/`reveal`/`ranking`）は、ホストが`allow_late_join`を許可していた場合のみ」「終了後（`ended`）はどちらの場合も参加不可」です。この3条件が、上のコードの2つの`if`文にそのまま対応しています。
+- **★ 追加：`active_from_q`**。途中参加は許可されていても、「今まさに出題・発表中の問題」にいきなり混ざれてしまうと、他の参加者より不利・有利な状況（回答時間が短い／逆に既に発表された答えが見えている等）が生まれます。そこで、参加した瞬間の`room["state"]`が`question`/`reveal`/`ranking`（＝制限時間が既に動いている、または動いていた問題がある状態）なら、次の問題（`current_q + 1`）からアクティブになるようにしています。`countdown`/`intro`（まだ制限時間が始まっていない区間）に参加した場合は、その今の問題からそのまま参加できます（`active_from_q = current_q`）。この値は[01_ルーム状態のJSON化と問題の自動生成.md](01_ルーム状態のJSON化と問題の自動生成.md)の`_quiz_room_snapshot`で「見学中」(`spectating`)判定に、[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)の`_quiz_autoadvance_locked`で全員回答済み判定の除外に、それぞれ使われます。
 - `notify_change(guild_id)`… **参加者が増えたことを、他の端末が次にポーリングするのを待たずに即座に通知します**。「遅延低減」というコメントが、この関数を含む複数のクイズAPIに繰り返し登場します。クイズはリアルタイム性が特に重視される機能なので、通常のポーリングに加えて、状態が変わるたびに積極的にSSE通知を送る設計になっています。
 
 ## 3. `/quiz_state`：状態のポーリング（5411〜5435行）
@@ -146,11 +156,13 @@ def quiz_start():
         room["intro_started_at"] = None
         room["question_started_at"] = None
         room["reveal_started_at"] = None
+        room["ranking_started_at"] = None
         room["first_correct_id"] = None
         room["first_correct_nickname"] = None
         for p in room["players"].values():
             p["cur_answer"] = None
             p["cur_correct"] = None
+            p["cur_answered_at"] = None
         room["last_activity"] = now
         snap = _quiz_room_snapshot(room, student_id)
     # ★ 遅延低減：カウントダウン開始を、他の端末のポーリング待ちなしで即座に知らせる
@@ -184,6 +196,10 @@ def quiz_answer():
         player = room["players"].get(student_id)
         if player is None:
             return jsonify({"ok": False, "error": "not_in_room"})
+        if player.get("active_from_q", 0) > room["current_q"]:
+            # ★ 追加：途中参加でこの問題はまだ「見学中」の人からの回答は受け付けない
+            #   （フロント側は元々選択肢を出さない設計だが、APIを直接叩かれた場合の保険）。
+            return jsonify({"ok": False, "error": "spectating"})
         if player["cur_answer"] is not None:
             return jsonify({"ok": False, "error": "already_answered"})
 
@@ -191,6 +207,9 @@ def quiz_answer():
         correct = (choice_index == q["correct_index"])
         player["cur_answer"] = choice_index
         player["cur_correct"] = correct
+        player["cur_answered_at"] = now
+        # ★ 追加：同点タイブレーク用に、回答にかかった時間（正誤にかかわらず）を積算する
+        player["total_answer_time"] = player.get("total_answer_time", 0.0) + (now - room["question_started_at"])
         if correct:
             points = QUIZ_ANSWER_BASE_POINTS
             if room["first_correct_id"] is None:
@@ -204,7 +223,9 @@ def quiz_answer():
     return jsonify({"ok": True})
 ```
 - `if room["state"] != "question":`… 出題中（`"question"`）以外の状態での回答は受け付けません。
+- **★ 追加：見学中ガード**。途中参加でこの問題にはまだ混ざれない（`active_from_q`が今の`current_q`より大きい）人からの回答は`"spectating"`エラーで拒否します。フロント側はそもそも見学中の人には選択肢のボタン自体を出さないため、通常はここに到達しませんが、APIを直接叩かれた場合の保険として二重にガードしています。
 - `if player["cur_answer"] is not None:`… **既に回答済みの場合、二重に回答を送れないようにするガード**です。これにより、同じ問題に対して1人が複数回答を送りつけて得点を不正に稼ぐことはできません。
+- **★ 追加：`cur_answered_at`・`total_answer_time`**。回答した時刻をその問題ごとに記録（`cur_answered_at`、次の問題が始まるとリセットされる）するのに加え、回答にかかった時間（`now - room["question_started_at"]`、正誤にかかわらず）を`total_answer_time`に積算していきます。前者は正解発表(reveal)中のミニ順位表の並び順（押した順）に、後者はスコアが同点だったときの全体順位のタイブレークに使われます。
 - `if room["first_correct_id"] is None:`… その問題での「一番最初の正解者」だけにボーナス（`QUIZ_FIRST_CORRECT_BONUS`）が付きます。`first_correct_id`が既に埋まっていれば（誰か他の人が先に正解していれば）、このボーナス判定はスキップされます。
 - `_quiz_autoadvance_locked(room, now)`… コメントの通り、この回答によって「全員が回答し終わった」場合、次のポーリングを待たずに、その場で正解発表（`reveal`）へ進めます。これも「体感の速さ」のための工夫で、[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)で見た`_quiz_scheduler_loop`（0.15秒ごとの自動チェック）と合わせて、**あらゆる場面でできるだけ素早く状態を進行させる**という一貫した設計方針が表れています。
 
