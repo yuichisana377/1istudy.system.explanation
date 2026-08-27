@@ -361,7 +361,7 @@ function renderInProgressUI() {
           <div class="inprogress-title">${it.icon} ${esc(it.name)}</div>
           <div class="inprogress-meta">${it.idx + 1} / ${it.total} 問</div>
           <div class="inprogress-bar-track"><div class="inprogress-bar-fill" style="width:${pct}%"></div></div>
-          <div class="inprogress-resume-btn">▶️ 続きから</div>
+          <div class="inprogress-resume-btn">${Icons.cmHtml('play', {size:14})} 続きから</div>
         </div>`;
       }).join('');
     }
@@ -369,7 +369,8 @@ function renderInProgressUI() {
   renderCompletedUI(); // ★ 追加：プレイ済み（完了）欄も同時に更新する
 }
 ```
-- `renderInProgressUI()`（1101〜1125行）はこれを実際にホーム画面の「▶️ プレイ中のデッキ」欄に描画する関数です。進捗バー（`〇問中△問目`をパーセントに変換）付きのカードを並べ、最後に`renderCompletedUI()`（下記）も一緒に呼び出します。
+- `renderInProgressUI()`（1101〜1125行）はこれを実際にホーム画面の「プレイ中のデッキ」欄に描画する関数です。進捗バー（`〇問中△問目`をパーセントに変換）付きのカードを並べ、最後に`renderCompletedUI()`（下記）も一緒に呼び出します。
+- ★ 追加（2026/08/27）：「続きから」の再生アイコンは、絵文字（▶️）から`Icons.js`の`Icons.cmHtml('play', ...)`（色付きの塗りつぶし三角形SVG）に置き換えました。サイト全体で以前に行われた「絵文字はOS/ブラウザで見た目が揃わないため自作SVGアイコンに統一する」という置換作業に、この2箇所（本欄とプレイモード選択モーダル、後述）だけ漏れていたための対応です。
 
 ### 4.2 「プレイ済み（完了）」の一覧（1127〜1183行）
 

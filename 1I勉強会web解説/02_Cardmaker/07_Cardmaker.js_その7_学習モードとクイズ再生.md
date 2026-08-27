@@ -30,23 +30,36 @@ async function openPlayMode(deckId) {
   //   ★ ただし公開済み（filenameあり）なら「みんなでクイズ」も選べるよう、
   //     一人用選択式モーダルを出す前に軽く選ばせる（play-mode-itemと同じ見た目）。
   if (isDeckInFolderScope(deckId, QUIZ_ARCHIVE_FOLDER_ID) || deck.choiceMode) {
-    if (!deck.filename) return startSoloQuiz(deckId);
-    const choice = await showCmChoiceDialog({
-      title: deck.name,
-      choices: [
-        { icon: Icons.cmHtml('choice', {size:20}), label: '一人でプレイ', sub: '選択式クイズに一人で挑戦する', value: 'solo' },
-        { icon: Icons.cmHtml('quiz', {size:20}), label: 'みんなでクイズを始める', sub: '友達とオンラインで早押し4択', value: 'multi' },
-      ],
-    });
+    const dialogChoices = [
+      { icon: Icons.cmHtml('choice', {size:20}), label: '一人でプレイ', sub: '選択式クイズに一人で挑戦する', value: 'solo' },
+    ];
+    if (deck.filename) {
+      dialogChoices.push({ icon: Icons.cmHtml('quiz', {size:20}), label: 'みんなでクイズを始める', sub: '友達とオンラインで早押し4択', value: 'multi' });
+    }
+    dialogChoices.push({ icon: Icons.html('list', {size:20}), label: '一覧で見る', sub: '問題と答え・解説をまとめて表示', value: 'list' });
+    const choice = await showCmChoiceDialog({ title: deck.name, choices: dialogChoices });
     if (choice === 'multi') return startQuizFromDeck(deckId);
     if (choice === 'solo') return startSoloQuiz(deckId);
+    if (choice === 'list') {
+      await waitForPendingSync(deckId);
+      let result = await ensureDeckCardsLoaded(deckId, true);
+      while (!result.ok) {
+        const retry = await showCmConfirm({ title: '読み込みに失敗しました', ... });
+        if (!retry) return;
+        result = await ensureDeckCardsLoaded(deckId, true);
+      }
+      studyIsFolder = false;
+      studyDeckId = deckId;
+      return openListView();
+    }
     return; // キャンセル
   }
   studyIsFolder = false;
   studyDeckId = deckId;
 ```
 - 「クイズ過去問」フォルダの中のデッキ、または多肢選択デッキは、通常のフラッシュカード学習（すべて/わからないだけ/続きから）ではなく、選択式（4択のような形式）の一人用クイズでプレイします。
-- 公開済みデッキであれば、その前に「一人でプレイ」か「みんなでクイズを始める」かを軽く選ばせます。非公開デッキは「みんなでクイズ」が使えない（後述）ため、この選択自体をスキップしていきなり一人用クイズを始めます。
+- 選択肢は常に「一人でプレイ」と「一覧で見る」を出し、公開済みデッキ（`filename`あり）のときだけ「みんなでクイズを始める」も追加します。★ 追加（2026/08/27）：以前は非公開デッキだとこの選択自体をスキップしていきなり一人用クイズを始めていましたが、「一覧で見る」を追加した際に、非公開デッキでも（一人用プレイと一覧のどちらかを選べるよう）常にこのダイアログを出す形に変更しました。
+- 「一覧で見る」を選んだ場合は、`startSoloQuiz`と同じパターン（`waitForPendingSync`→`ensureDeckCardsLoaded`、失敗時は再試行モーダル）でサーバーの最新カードを取り直してから、通常デッキと同じ`openListView()`（[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)参照）を呼びます。一覧側では、選択式デッキに反転モードの概念が無いこと（`openListView`が`studyDeckId`のデッキの`choiceMode`を見て`listViewReverse`を強制的に`false`にする）、正解以外の選択肢も小さく添えて表示すること、「クイズ過去問」（読み取り専用）デッキでは個別カードの編集ボタンを出さないことが、通常デッキの一覧表示と異なる点です。
 
 通常のフラッシュカードデッキの場合は、下に続く処理でプレイモード選択モーダル（`modal-play-mode`）を開く準備をします：
 
@@ -484,21 +497,39 @@ document.addEventListener('keydown', e => {
 
 ---
 
-## 9. 自動採点＋「4択にする」モード（2026/08/26追加）
+## 9. 自動採点＋「4択にする」モード（2026/08/26追加、2026/08/27にトグルの見せ方を変更）
 
-「自動採点する（解答入力）」をONにした時だけ、さらに「4択にする（みんなでクイズと同じ形式）」というサブトグルを選べるようにした。ONにすると、解答をテキストで入力する代わりに、[../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md)で解説した「みんなでクイズ」と同じ4択ボタン（`qp-choices`/`qp-choice-btn`のCSSをそのまま流用）で答える形式になる。
+「自動採点する（解答入力）」をONにすると、さらに「4択にする（みんなでクイズと同じ形式）」というトグルを選べる。ONにすると、解答をテキストで入力する代わりに、[../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/01_ルーム状態のJSON化と問題の自動生成.md)で解説した「みんなでクイズ」と同じ4択ボタン（`qp-choices`/`qp-choice-btn`のCSSをそのまま流用）で答える形式になる。
 
-### 9-1. トグルの表示制御
+### 9-1. トグルの表示制御（2026/08/27に変更）
+
+初版（2026/08/26）は「自動採点する」をONにした時だけ「4択にする」の行がその場に現れる、折りたたみ式のサブトグルだった。ユーザーから「普通にプレイするとき、4択にするはたたまず表示。押されたら自動採点も自動でオン」という要望を受け、**「4択にする」を（反転モード中を除いて）常に表示する独立したトグルに変更**し、ONにした側から自動採点を連動させる向きに逆転させた。
 
 ```js
+function onReverseModeToggleChange() {
+  const reversed = document.getElementById('reverse-mode-checkbox').checked;
+  document.getElementById('auto-grade-toggle-row').style.display = reversed ? 'none' : '';
+  document.getElementById('four-choice-toggle-row').style.display = reversed ? 'none' : '';
+  if (reversed) {
+    document.getElementById('auto-grade-checkbox').checked = false;
+    document.getElementById('four-choice-checkbox').checked = false;
+  }
+}
+
 function onAutoGradeToggleChange() {
   const on = document.getElementById('auto-grade-checkbox').checked;
-  const row = document.getElementById('four-choice-toggle-row');
-  row.style.display = on ? '' : 'none';
   if (!on) document.getElementById('four-choice-checkbox').checked = false;
 }
+
+function onFourChoiceToggleChange() {
+  if (!document.getElementById('four-choice-checkbox').checked) return;
+  const autoGrade = document.getElementById('auto-grade-checkbox');
+  if (!autoGrade.checked) { autoGrade.checked = true; onAutoGradeToggleChange(); }
+}
 ```
-「自動採点する」チェックボックスの`onchange`から呼ばれ、ONの時だけ「4択にする」の行を表示する（自動採点自体がOFFなら4択も意味が無いため）。`onReverseModeToggleChange()`が反転モードON時に自動採点を強制OFFにする箇所でもこの関数を呼び、連動して4択サブトグルも隠すようにしてある。
+- 表示・非表示は反転モードだけで決める（`onReverseModeToggleChange`が自動採点行・4択行の両方を同時に出し分ける）。反転モードとの併用は元々意味を持たないため、反転ON時はこれまで通り両方隠して強制OFFにする。
+- `onAutoGradeToggleChange`は「表示を切り替える」役目を失い、「自動採点をOFFにしたら4択も連動してOFFにする」（4択は自動採点が前提の機能なので、チェックだけ残ると`studyFourChoice`の実際の判定とUIの見た目がズレてしまうのを防ぐ）片方向の後始末だけが残った。
+- 新設の`onFourChoiceToggleChange`（`four-choice-checkbox`の`onchange`）が、要望の「押されたら自動採点も自動でオン」を実現する。4択をONにした瞬間、まだ自動採点がOFFならこちらを先にONにしてから`onAutoGradeToggleChange()`を呼ぶ（この時点では4択は既にONなので、後始末側で消されることはない）。
 
 ### 9-2. 選択肢の組み立て：`setupFourChoiceIfNeeded`（デッキ全体を1問題プールに）
 
