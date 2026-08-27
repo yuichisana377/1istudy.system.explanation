@@ -7,12 +7,13 @@
 ## 1. 一人用クイズへの入口（3750〜3760行）
 
 ```js
-async function startSoloQuiz(deckId) {
+async function startSoloQuiz(deckId, mode) {
   await loadChunkWithFeedback('quizplay', '/Cardmaker-quizplay.js');
-  return startSoloQuiz(deckId);
+  return startSoloQuiz(deckId, mode);
 }
 ```
 - これまで何度も出てきたパターンと同じで、実際のクイズ再生ロジックは`Cardmaker-quizplay.js`（[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)）に分離されており、この関数は読み込みの「仮の窓口」です。
+- `mode`（`'all'`/`'unsure'`/`'resume'`）は2026/08/27に追加された引数で、後述の`startStudyMode`から渡ってきます。
 
 ---
 
@@ -20,46 +21,39 @@ async function startSoloQuiz(deckId) {
 
 デッキの「▶プレイ」ボタンを押したときの入口です。
 
+### 2.1 変遷（2026/08/27）
+
+初版はここで「クイズ過去問」フォルダの中のデッキ・多肢選択デッキだけを別扱いにし、通常のプレイモード選択モーダル（`modal-play-mode`）を経由せず、専用の簡易ダイアログ（`showCmChoiceDialog`で「一人でプレイ」/「みんなでクイズを始める」を選ばせる）へ直接分岐させていた。ユーザーから「過去問についてはプレイを押したときの選択肢は、続きから・すべてのカード・みんなでクイズ・一覧でミルといったようにふつうのデッキと同じでいい。違うのは逆モードや自動採点４択が表示されない」という指摘を受け、**専用ダイアログを廃止し、通常デッキと全く同じ`modal-play-mode`を経由させる**方式に作り直した。
+
 ```js
 async function openPlayMode(deckId) {
   const deck = decks.find(d => d.id === deckId);
   if (!deck) return;
-  // ★「クイズ過去問」フォルダの中のデッキ、および多肢選択デッキ（choiceMode有り）は、
-  //   通常のフラッシュカード（すべて/わからないだけ/続きから の選択モーダル）
-  //   ではなく、一人用選択式モードでプレイする。
-  //   ★ ただし公開済み（filenameあり）なら「みんなでクイズ」も選べるよう、
-  //     一人用選択式モーダルを出す前に軽く選ばせる（play-mode-itemと同じ見た目）。
-  if (isDeckInFolderScope(deckId, QUIZ_ARCHIVE_FOLDER_ID) || deck.choiceMode) {
-    const dialogChoices = [
-      { icon: Icons.cmHtml('choice', {size:20}), label: '一人でプレイ', sub: '選択式クイズに一人で挑戦する', value: 'solo' },
-    ];
-    if (deck.filename) {
-      dialogChoices.push({ icon: Icons.cmHtml('quiz', {size:20}), label: 'みんなでクイズを始める', sub: '友達とオンラインで早押し4択', value: 'multi' });
-    }
-    dialogChoices.push({ icon: Icons.html('list', {size:20}), label: '一覧で見る', sub: '問題と答え・解説をまとめて表示', value: 'list' });
-    const choice = await showCmChoiceDialog({ title: deck.name, choices: dialogChoices });
-    if (choice === 'multi') return startQuizFromDeck(deckId);
-    if (choice === 'solo') return startSoloQuiz(deckId);
-    if (choice === 'list') {
-      await waitForPendingSync(deckId);
-      let result = await ensureDeckCardsLoaded(deckId, true);
-      while (!result.ok) {
-        const retry = await showCmConfirm({ title: '読み込みに失敗しました', ... });
-        if (!retry) return;
-        result = await ensureDeckCardsLoaded(deckId, true);
-      }
-      studyIsFolder = false;
-      studyDeckId = deckId;
-      return openListView();
-    }
-    return; // キャンセル
-  }
   studyIsFolder = false;
   studyDeckId = deckId;
 ```
-- 「クイズ過去問」フォルダの中のデッキ、または多肢選択デッキは、通常のフラッシュカード学習（すべて/わからないだけ/続きから）ではなく、選択式（4択のような形式）の一人用クイズでプレイします。
-- 選択肢は常に「一人でプレイ」と「一覧で見る」を出し、公開済みデッキ（`filename`あり）のときだけ「みんなでクイズを始める」も追加します。★ 追加（2026/08/27）：以前は非公開デッキだとこの選択自体をスキップしていきなり一人用クイズを始めていましたが、「一覧で見る」を追加した際に、非公開デッキでも（一人用プレイと一覧のどちらかを選べるよう）常にこのダイアログを出す形に変更しました。
-- 「一覧で見る」を選んだ場合は、`startSoloQuiz`と同じパターン（`waitForPendingSync`→`ensureDeckCardsLoaded`、失敗時は再試行モーダル）でサーバーの最新カードを取り直してから、通常デッキと同じ`openListView()`（[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)参照）を呼びます。一覧側では、選択式デッキに反転モードの概念が無いこと（`openListView`が`studyDeckId`のデッキの`choiceMode`を見て`listViewReverse`を強制的に`false`にする）、正解以外の選択肢も小さく添えて表示すること、「クイズ過去問」（読み取り専用）デッキでは個別カードの編集ボタンを出さないことが、通常デッキの一覧表示と異なる点です。
+- 通常デッキ・クイズ過去問/多肢選択デッキのどちらであっても、まず`studyIsFolder`/`studyDeckId`をセットする（以前は専用ダイアログの分岐がこれより前にあり、通過できないケースがあった）。
+
+続くカード読み込み（`waitForPendingSync`→`ensureDeckCardsLoaded`、失敗時の再試行モーダル）は変更なし。読み込み後、モーダルの中身を組み立てる際に分岐が入る：
+
+```js
+  document.getElementById('reverse-mode-checkbox').checked = false;
+  document.getElementById('auto-grade-checkbox').checked = false;
+  document.getElementById('four-choice-checkbox').checked = false;
+  // ★ 追加：クイズ過去問・多肢選択デッキは反転モード・自動採点系のトグル自体を出さない
+  const isQuizDeck = isQuizPlayDeck(deck);
+  document.getElementById('reverse-toggle-row').style.display = isQuizDeck ? 'none' : '';
+  if (isQuizDeck) {
+    document.getElementById('auto-grade-toggle-row').style.display = 'none';
+    document.getElementById('four-choice-toggle-row').style.display = 'none';
+  } else {
+    onReverseModeToggleChange();
+    onAutoGradeToggleChange();
+  }
+  document.getElementById('play-mode-deck-name').textContent = deck.name;
+```
+- `isQuizPlayDeck(deck)`（新設のヘルパー、`isDeckInFolderScope(deck.id, QUIZ_ARCHIVE_FOLDER_ID) || deck.choiceMode`をまとめただけ）でクイズ過去問/多肢選択デッキかどうかを判定し、そうであれば反転モード（`reverse-toggle-row`）・自動採点（`auto-grade-toggle-row`）・4択にする（`four-choice-toggle-row`）の3行を丸ごと`display:none`にする。それ以外（通常デッキ）は従来通り`onReverseModeToggleChange()`/`onAutoGradeToggleChange()`で状態に応じて出し分ける。
+- これ以降（「続きから」項目の表示・「わからないカードだけ」の件数計算・「みんなでクイズを始める」の表示条件・`openModal('modal-play-mode')`）は通常デッキ・クイズ過去問デッキで完全に共通。「一覧で見る」（`onclick="openListView()"`）も元々このモーダルの一項目としてあったため、クイズ過去問デッキでも自動的に選べるようになった（詳細は4節・[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)参照。選択式デッキに反転モードの概念が無いこと・正解以外の選択肢も小さく添えて表示すること・「クイズ過去問」では個別カードの編集ボタンを出さないことが、通常デッキの一覧表示と異なる点）。
 
 通常のフラッシュカードデッキの場合は、下に続く処理でプレイモード選択モーダル（`modal-play-mode`）を開く準備をします：
 
@@ -141,13 +135,27 @@ function onReverseModeToggleChange() {
 
 `mode`は`'all'`（すべて）／`'unsure'`（わからないだけ）／`'resume'`（続きから）のいずれかです。
 
+### 3.0 クイズ過去問/多肢選択デッキへの振り分け（2026/08/27追加）
+
 ```js
 async function startStudyMode(mode) {
-  studyReverse = document.getElementById('reverse-mode-checkbox').checked;
-  // ★ 追加：自動採点は反転モードでない場合のみ有効にする（反転中はトグル自体を隠しているが念のため二重に保険）
-  studyAutoGrade = !studyReverse && document.getElementById('auto-grade-checkbox').checked;
   const progressId = studyIsFolder ? studyFolderId : studyDeckId;
+  const quizDeck = !studyIsFolder ? decks.find(d => d.id === studyDeckId) : null;
+  const isQuizDeck = isQuizPlayDeck(quizDeck);
+
+  if (!isQuizDeck) {
+    studyReverse = document.getElementById('reverse-mode-checkbox').checked;
+    studyAutoGrade = !studyReverse && document.getElementById('auto-grade-checkbox').checked;
+    studyFourChoice = studyAutoGrade && document.getElementById('four-choice-checkbox').checked;
+  }
 ```
+- `isQuizDeck`なら（2節の通り反転・自動採点系のチェックボックス自体が表示されていないため）読み取らない。フォルダプレイ（`studyIsFolder`）は対象外（クイズ過去問/多肢選択デッキの特別扱いは単一デッキのプレイにしか元々無いため）。
+
+「続きから」データの上書き確認（次項3.1）は通常デッキと共通のまま実行したあと、`closeModal('modal-play-mode')`の直後にこう分岐する：
+```js
+  if (isQuizDeck) return startSoloQuiz(studyDeckId, mode);
+```
+- `mode`（`'all'`/`'unsure'`/`'resume'`）をそのまま`startSoloQuiz`（1節、実体は`Cardmaker-quizplay.js`）に渡し、以降のフラッシュカード用の処理（3.2・3.3）はスキップする。`resumeFromHome`（ホーム画面の「プレイ中」カードから直接続きを再開する入口、2節通過前に`studyIsFolder`/`studyDeckId`をセットしてから`startStudyMode('resume')`を直接呼ぶ）もこの分岐で正しく拾われる。
 
 ### 3.1 「続きから」データの上書き確認
 ```js
@@ -679,6 +687,7 @@ function answerStudyChoice(idx) {
 }
 ```
 選んだ瞬間に採点まで行う（クイズと同じ「選ぶ＝回答確定」の1ステップ）。正誤判定後の見た目（正解を緑・選んだ誤答を赤・他を薄く）は[06_Cardmaker.js_その6](06_Cardmaker.js_その6_カード編集と学習データ同期.md)のクイズ再生機能と統一している。間違えたら自動で「わからない」にマークする処理は、通常の`gradeCurrentAnswer()`と共通の`autoMarkUnsureForCard()`に切り出した（以前は`gradeCurrentAnswer()`内に直接書かれていた）。
+- ★ 追加（2026/08/27）：`answerStudyChoice()`は元々`grade-user-answer`要素（テキスト入力の自動採点モードで使う「あなたの解答：〇〇」表示、`gradeCurrentAnswer()`と共有）に選んだ選択肢を書き出していたが、選んだ選択肢はボタン自体の色分け（正解=緑・選んだ誤答=赤）で既に示されており冗長、というユーザーの指摘で撤去した。ただし単に行を消すのではなく`userAnswerEl.textContent = ''`と明示的に空にしている。理由は、同じ学習セッション内でこのカードの前にテキスト入力の自動採点モードのカードがあった場合、`grade-user-answer`に前のカードの「あなたの解答：〇〇」がそのまま残っており、何もしないと（`result.style.display='flex'`で同じコンテナごと再表示される際に）古いテキストが一瞬見えてしまうため。
 
 ### 9-5. 「続きから」再開への対応
 
