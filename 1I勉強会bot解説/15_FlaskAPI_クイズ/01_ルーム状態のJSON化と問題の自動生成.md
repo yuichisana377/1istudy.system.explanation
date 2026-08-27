@@ -94,6 +94,13 @@ def _quiz_room_snapshot(room, student_id):
         #   1プレイヤーとして参加するため、ホストだけ特別扱いはしない。
         if revealed:
             question_payload["correct_index"] = q["correct_index"]
+        # ★ 追加（2026/08/27）：ホストの詳細設定「ボーナス問題」対象なら、
+        #   得点2倍であることをクライアントにも予告する（画面上のバッジ表示用。
+        #   得点計算そのものは[03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)の
+        #   quiz_answer側）。正解番号と違い、これは出題中から見えても問題ない
+        #   （カンニングにならない）情報なのでrevealed判定を挟まない。
+        if room["current_q"] in room.get("bonus_indices", set()):
+            question_payload["is_bonus"] = True
         # ★ 追加：途中参加でまだ「見学中」の人は、回答受付数・合計人数のどちらにもカウントしない。
         active_players = [p for p in room["players"].values() if p.get("active_from_q", 0) <= room["current_q"]]
         snap.update({
