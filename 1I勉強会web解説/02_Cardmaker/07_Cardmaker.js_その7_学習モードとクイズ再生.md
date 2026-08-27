@@ -4,16 +4,9 @@
 
 ---
 
-## 1. 一人用クイズへの入口（3750〜3760行）
+## 1. （廃止）一人用クイズへの入口だった`startSoloQuiz`
 
-```js
-async function startSoloQuiz(deckId, mode) {
-  await loadChunkWithFeedback('quizplay', '/Cardmaker-quizplay.js');
-  return startSoloQuiz(deckId, mode);
-}
-```
-- これまで何度も出てきたパターンと同じで、実際のクイズ再生ロジックは`Cardmaker-quizplay.js`（[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)）に分離されており、この関数は読み込みの「仮の窓口」です。
-- `mode`（`'all'`/`'unsure'`/`'resume'`）は2026/08/27に追加された引数で、後述の`startStudyMode`から渡ってきます。
+★ 2026/08/27・2回目の変更で、この関数と専用画面（`screen-quiz-play`）自体を廃止した。経緯は9-7節を参照。クイズ過去問・多肢選択デッキも、下の2〜3節で見る通常デッキと全く同じ`openPlayMode`/`startStudyMode`/`screen-study`を通る（`Cardmaker-quizplay.js`にはデッキ完走後のスコア送信・ランキング取得だけが残っている＝[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)参照）。
 
 ---
 
@@ -135,27 +128,42 @@ function onReverseModeToggleChange() {
 
 `mode`は`'all'`（すべて）／`'unsure'`（わからないだけ）／`'resume'`（続きから）のいずれかです。
 
-### 3.0 クイズ過去問/多肢選択デッキへの振り分け（2026/08/27追加）
+### 3.0 クイズ過去問/多肢選択デッキも同じ画面でプレイする（2026/08/27、2回目の変更）
+
+★ 初版（1回目の変更）は、クイズ過去問/多肢選択デッキだけ`startSoloQuiz`（専用画面`screen-quiz-play`）に丸ごと振り分けていた。ユーザーから「プレイ中の画面もほかのカードでのプレイ画面とほぼ同じにしてほしい」「編集ボタンだけ消して、それ以外は同じ画面」という指摘を受け、**専用画面自体を廃止し、通常デッキと全く同じ`screen-study`（フラッシュカード画面）でプレイする**方式に作り直した（9-7節に詳しい）。`isQuizPlayDeck(deck)`はそのままだが、使い道が「別画面に飛ばす分岐」から「同じ画面の中でクイズ用の値を使う分岐」に変わっている。
 
 ```js
+let studyIsQuizDeck = false;
+let studyQuizAnswers = new Map(); // cardKey → isCorrect（クイズプレイ中の各カードの最新の正誤）
+let studyQuizSelected = new Set(); // 複数正解モードで、まだ確定前に選んでいる選択肢
+
 async function startStudyMode(mode) {
   const progressId = studyIsFolder ? studyFolderId : studyDeckId;
   const quizDeck = !studyIsFolder ? decks.find(d => d.id === studyDeckId) : null;
-  const isQuizDeck = isQuizPlayDeck(quizDeck);
+  studyIsQuizDeck = isQuizPlayDeck(quizDeck);
 
-  if (!isQuizDeck) {
+  if (!studyIsQuizDeck) {
     studyReverse = document.getElementById('reverse-mode-checkbox').checked;
     studyAutoGrade = !studyReverse && document.getElementById('auto-grade-checkbox').checked;
     studyFourChoice = studyAutoGrade && document.getElementById('four-choice-checkbox').checked;
+  } else {
+    studyReverse = false; studyAutoGrade = false; studyFourChoice = false;
   }
 ```
-- `isQuizDeck`なら（2節の通り反転・自動採点系のチェックボックス自体が表示されていないため）読み取らない。フォルダプレイ（`studyIsFolder`）は対象外（クイズ過去問/多肢選択デッキの特別扱いは単一デッキのプレイにしか元々無いため）。
+- `studyIsQuizDeck`はモジュールグローバル（`studyIsFolder`等と同格）になり、`renderStudyCard`・`currentStudyChoiceEntry`・`shuffleStudy`・キーボードショートカットなど画面のあちこちから参照される。
+- クイズ過去問/多肢選択デッキは、2節の通り反転・自動採点系のチェックボックス自体を表示していないため読み取らない（`false`に固定）。
 
-「続きから」データの上書き確認（次項3.1）は通常デッキと共通のまま実行したあと、`closeModal('modal-play-mode')`の直後にこう分岐する：
+「続きから」データの上書き確認（3.1節、共通のまま）のあと、`mode==='resume'`（3.2節）／`else`（3.3節）どちらの分岐も、**もう`startSoloQuiz`へ丸投げしない**。同じ`studyCards`/`studyIdx`を組み立てる処理を両デッキ種別で共有しつつ、クイズ過去問/多肢選択デッキのときだけ次の2点を追加で行う：
+
+1. **選択式として遊べるカードだけに絞る**（`normalizeQuizPlayableCards(cards)`という新設ヘルパー。以前`Cardmaker-quizplay.js`の`startSoloQuiz`内にあった「`choices`が`CHOICE_MIN`件未満のカードを除外し、`correct_index`単数を`correct_indices`配列へ正規化する」ロジックをそのまま移設したもの）。`mode==='resume'`なら復元用の`pool`に、`else`なら`deck.cards`（または`mode==='unsure'`ならその中の絞り込み前）に適用する。絞った結果0件なら、`showCmAlert`で「選択式の問題がありません」／「わからないカードはありません」を出して中断する（通常デッキには無い、クイズ過去問固有のガード）。
+2. **`studyQuizAnswers`の初期化/復元**：新規開始（`else`分岐）なら空の`Map`にリセット、`resume`なら`saved.quizAnswers`（配列化して保存されている、後述4.x節ではなく`saveStudyProgress`の解説＝6節参照）から復元する。スコアは素点のカウンタではなく、この`Map`（cardKey→正誤）から都度数え直す方式にしてある（「← 前へ」で戻って答え直しても二重加点しないため。9-7節で詳述）。
+
+`setupFourChoiceIfNeeded()`（AI4択の事前準備、6節）の呼び出しも`if (!studyIsQuizDeck)`でガードするようになった（クイズ過去問/多肢選択デッキは選択肢が最初からカードに入っているため不要）。最後に、画面を開く直前に次の1行が増えている：
+
 ```js
-  if (isQuizDeck) return startSoloQuiz(studyDeckId, mode);
+  document.getElementById('study-edit-btn').style.display = (quizDeck && quizDeck.quizArchive) ? 'none' : '';
 ```
-- `mode`（`'all'`/`'unsure'`/`'resume'`）をそのまま`startSoloQuiz`（1節、実体は`Cardmaker-quizplay.js`）に渡し、以降のフラッシュカード用の処理（3.2・3.3）はスキップする。`resumeFromHome`（ホーム画面の「プレイ中」カードから直接続きを再開する入口、2節通過前に`studyIsFolder`/`studyDeckId`をセットしてから`startStudyMode('resume')`を直接呼ぶ）もこの分岐で正しく拾われる。
+- 「クイズ過去問」デッキ（`quizArchive`。ホストが作ったオリジナル4択の自動保存分）はデッキメニューの「編集」自体を隠している読み取り専用デッキ（[3節の元記事](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)の`openDeckMenu`参照）なので、学習画面の「編集」ボタンも同様に隠す。**`studyIsQuizDeck`より狭い条件**（`quizDeck.quizArchive`）を使っているのがポイントで、ユーザーが自作した多肢選択デッキ（`choiceMode`はあるが`quizArchive`ではない）はカード編集が引き続きできるため対象外にしてある。
 
 ### 3.1 「続きから」データの上書き確認
 ```js
@@ -663,35 +671,93 @@ async function scheduleFourChoiceAiEnhancement(skipKeys) {
 - **失敗時は静かに諦める**：通信エラー・`ai_unavailable`（Ollama未設定）・`ai_failed`のいずれでも、例外を投げたりアラートを出したりせず、それ以降のバッチも打ち切ってそのまま返る。既に`setupFourChoiceIfNeeded()`で組み立てた綴り類似度ベースの4択がそのまま使われ続けるため、学習自体は何の影響も受けない。
 - **未ログインなら最初から呼ばない**：CardMaker自体がページ全体でログイン必須だが、念のためのガード。
 
-### 9-4. 表示・採点：`renderStudyCard`の分岐と`answerStudyChoice`
+### 9-4. 表示・採点：`renderStudyCard`の分岐と`currentStudyChoiceEntry`（2026/08/27に一般化）
+
+★ 選択肢の出所が「AIが組み立てた4択（`studyChoicesMap`、単一正解のみ）」1種類だけだった頃は`studyFourChoice ? studyChoicesMap.get(cardKey(c)) : null`で済んでいたが、クイズ過去問/多肢選択デッキ統合（3.0節）で「カード自身が最初から持っている`choices`/`correct_indices`（複数正解もありうる）」という2つ目の出所が増えたため、`currentStudyChoiceEntry(card)`という共通ヘルパーに一般化された。戻り値の形も`{choices, correctIndex}`（単数）から`{choices, correctIndices}`（配列）に変わっている。
 
 ```js
-const choiceEntry = studyFourChoice ? studyChoicesMap.get(cardKey(c)) : null;
+function currentStudyChoiceEntry(card) {
+  if (!card) return null;
+  if (studyIsQuizDeck) {
+    if (!Array.isArray(card.choices) || card.choices.length < CHOICE_MIN) return null;
+    const correctIndices = Array.isArray(card.correct_indices) ? card.correct_indices
+      : (typeof card.correct_index === 'number' ? [card.correct_index] : []);
+    if (!correctIndices.length) return null;
+    return { choices: card.choices, correctIndices };
+  }
+  if (!studyFourChoice) return null;
+  const e = studyChoicesMap.get(cardKey(card));
+  return e ? { choices: e.choices, correctIndices: [e.correctIndex] } : null;
+}
+```
+- `studyIsQuizDeck`と`studyFourChoice`は同じセッション内で同時にtrueになることは無い（`isQuizPlayDeck`な単一デッキだけが`studyIsQuizDeck`になり、その場合`openPlayMode`が反転・自動採点トグル自体を隠している＝3.0節）ため、この`if`/`if`は実質`if/else if`と同じ意味になる。
+
+```js
+const choiceEntry = currentStudyChoiceEntry(c);
 answerInputWrap.style.display = choiceEntry ? 'none' : '';
 choiceWrap.style.display = choiceEntry ? '' : 'none';
 document.getElementById('reveal-answer-btn').style.display = choiceEntry ? 'none' : '';
 if (choiceEntry) renderStudyChoices(choiceEntry);
 ```
-`choiceEntry`が無ければ（4択にできないカードであれば）今まで通りの解答入力欄になる。ある場合は選択肢欄（`study-choice-wrap`）を表示し、「答えを見る」ボタンだけを隠す（`study-reveal-bar`自体は「← 前へ」ボタンのぶんだけ表示したままにする）。
+`choiceEntry`が無ければ（選択式にできないカードであれば）今まで通りの解答入力欄になる。ある場合は選択肢欄（`study-choice-wrap`）を表示し、「答えを見る」ボタンだけを隠す（`study-reveal-bar`自体は「← 前へ」ボタンのぶんだけ表示したままにする）——ここまではクイズ過去問デッキでも通常デッキの4択サブモードでも完全に同じコードパスで、分岐は`currentStudyChoiceEntry`の中だけに閉じている。
+
+```js
+function renderStudyChoices(entry) {
+  studyChoiceAnswered = false;
+  studyQuizSelected = new Set();
+  const isMulti = entry.correctIndices.length > 1;
+  const el = document.getElementById('study-choices');
+  el.innerHTML = entry.choices.map((c, i) => `
+    <button type="button" class="qp-choice-btn" onclick="${isMulti ? `toggleStudyChoiceMulti(${i})` : `answerStudyChoice(${i})`}">
+      <b>${CHOICE_LETTERS[i]}.</b> <span id="study-choice-text-${i}"></span>
+    </button>`).join('');
+  entry.choices.forEach((c, i) => setMathText(document.getElementById(`study-choice-text-${i}`), c));
+  document.getElementById('study-choice-submit-wrap').style.display = isMulti ? '' : 'none';
+}
+```
+- **複数正解モード（`isMulti`）への対応が新設された**。以前（AI4択専用だった頃）は常に単一正解だったため無かった分岐。正解が2個以上のカード（クイズ過去問・多肢選択デッキだけで起こりうる）は、ボタンを押すたびに選択をON/OFFする`toggleStudyChoiceMulti(idx)`（旧`Cardmaker-quizplay.js`の`toggleQuizPlayMultiChoice`と同じ考え方）にし、選び終えたら`study-choice-submit-wrap`内の「この内容で回答する」ボタン（`submitStudyChoiceMulti()`）で確定する。単一正解のカードは従来通り、ボタンを押した瞬間に`answerStudyChoice(idx)`で即採点する。
 
 ```js
 function answerStudyChoice(idx) {
   if (studyChoiceAnswered) return;
+  const card = studyCards[studyIdx];
+  const entry = card && currentStudyChoiceEntry(card);
+  if (!entry) return;
+  const isCorrect = entry.correctIndices.includes(idx);
+  finishStudyChoiceAnswer(card, entry, isCorrect, new Set([idx]));
+}
+
+function submitStudyChoiceMulti() {
+  if (studyChoiceAnswered || studyQuizSelected.size === 0) return;
+  const card = studyCards[studyIdx];
+  const entry = card && currentStudyChoiceEntry(card);
+  if (!entry) return;
+  const correctSet = new Set(entry.correctIndices);
+  const isCorrect = correctSet.size === studyQuizSelected.size && [...correctSet].every(i => studyQuizSelected.has(i));
+  finishStudyChoiceAnswer(card, entry, isCorrect, studyQuizSelected);
+}
+
+function finishStudyChoiceAnswer(card, entry, isCorrect, selectedSet) {
   studyChoiceAnswered = true;
-  const entry = studyChoicesMap.get(cardKey(studyCards[studyIdx]));
-  const isCorrect = idx === entry.correctIndex;
   // 答案パネル表示・○×判定表示・選択肢ボタンの色分け（qp-correct/qp-wrong/qp-dim）は
-  // 一人用選択式クイズ（Cardmaker-quizplay.jsのanswerQuizPlay）と同じ考え方
+  // 旧一人用選択式クイズ（answerQuizPlay）と同じ考え方。userAnswerEl.textContentは
+  // 意図的に空のまま（「あなたの解答：〇〇」は出さない、下の教訓参照）。
+  if (studyIsQuizDeck) {
+    studyQuizAnswers.set(cardKey(card), isCorrect); // ★ 素点ではなくMapで最新の正誤を持つ（9-7節）
+    saveStudyProgress();
+  }
   autoMarkUnsureForCard(card, isCorrect);
   updateUnsureBtn();
 }
 ```
-選んだ瞬間に採点まで行う（クイズと同じ「選ぶ＝回答確定」の1ステップ）。正誤判定後の見た目（正解を緑・選んだ誤答を赤・他を薄く）は[06_Cardmaker.js_その6](06_Cardmaker.js_その6_カード編集と学習データ同期.md)のクイズ再生機能と統一している。間違えたら自動で「わからない」にマークする処理は、通常の`gradeCurrentAnswer()`と共通の`autoMarkUnsureForCard()`に切り出した（以前は`gradeCurrentAnswer()`内に直接書かれていた）。
-- ★ 追加（2026/08/27）：`answerStudyChoice()`は元々`grade-user-answer`要素（テキスト入力の自動採点モードで使う「あなたの解答：〇〇」表示、`gradeCurrentAnswer()`と共有）に選んだ選択肢を書き出していたが、選んだ選択肢はボタン自体の色分け（正解=緑・選んだ誤答=赤）で既に示されており冗長、というユーザーの指摘で撤去した。ただし単に行を消すのではなく`userAnswerEl.textContent = ''`と明示的に空にしている。理由は、同じ学習セッション内でこのカードの前にテキスト入力の自動採点モードのカードがあった場合、`grade-user-answer`に前のカードの「あなたの解答：〇〇」がそのまま残っており、何もしないと（`result.style.display='flex'`で同じコンテナごと再表示される際に）古いテキストが一瞬見えてしまうため。
+`answerStudyChoice`（単一正解）・`submitStudyChoiceMulti`（複数正解）はどちらも判定結果を`finishStudyChoiceAnswer`に渡すだけの薄い関数になった。選んだ瞬間に採点まで行う（クイズと同じ「選ぶ＝回答確定」の1ステップ）。間違えたら自動で「わからない」にマークする処理は、通常の`gradeCurrentAnswer()`と共通の`autoMarkUnsureForCard()`を引き続き使っている。
+- ★ 教訓（2026/08/27）：`finishStudyChoiceAnswer`は元々`grade-user-answer`要素（テキスト入力の自動採点モードで使う「あなたの解答：〇〇」表示、`gradeCurrentAnswer()`と共有）に選んだ選択肢を書き出していたが、選んだ選択肢はボタン自体の色分け（正解=緑・選んだ誤答=赤）で既に示されており冗長、というユーザーの指摘で撤去した。ただし単に行を消すのではなく`userAnswerEl.textContent = ''`と明示的に空にしている。理由は、同じ学習セッション内でこのカードの前にテキスト入力の自動採点モードのカードがあった場合、`grade-user-answer`に前のカードの「あなたの解答：〇〇」がそのまま残っており、何もしないと（`result.style.display='flex'`で同じコンテナごと再表示される際に）古いテキストが一瞬見えてしまうため。
 
 ### 9-5. 「続きから」再開への対応
 
-`saveStudyProgress()`が`fourChoice: studyFourChoice`も保存し、`startStudyMode('resume')`側で`studyFourChoice = studyAutoGrade && !!saved.fourChoice`として復元する。ただし`studyChoicesMap`自体（実際の選択肢の中身）は保存されず、再開のたびに`setupFourChoiceIfNeeded()`で新しく組み立て直す（＝再開すると誤答の顔ぶれは毎回変わる。正解・出題順は`saved.order`から復元されるため変わらない）。
+通常デッキ（AI4択サブモード）は`saveStudyProgress()`が`fourChoice: studyFourChoice`も保存し、`startStudyMode('resume')`側で`studyFourChoice = studyAutoGrade && !!saved.fourChoice`として復元する。ただし`studyChoicesMap`自体（実際の選択肢の中身）は保存されず、再開のたびに`setupFourChoiceIfNeeded()`で新しく組み立て直す（＝再開すると誤答の顔ぶれは毎回変わる。正解・出題順は`saved.order`から復元されるため変わらない）。
+
+クイズ過去問/多肢選択デッキは`choices`/`correct_indices`自体がカードに入っているため、この「誤答を組み立て直す」手間自体が無い。代わりに保存・復元するのは各問題の正誤（`studyQuizAnswers`、9-7節）で、こちらは`saveStudyProgress()`の`quizAnswers`フィールドに乗る。
 
 ### 9-6. コードレビューで見つかった細かい修正（2026/08/26）
 
@@ -699,6 +765,35 @@ function answerStudyChoice(idx) {
 - **`applyServerChoiceCaches`の並列化**：デッキごとに`for...of`で直列に`await fetch`していたため、フォルダ再生でデッキ数が多いと最悪「デッキ数×5秒」待つ設計になっていた（1デッキなら数百ms程度、というこの節の説明と矛盾する動き方）。`Promise.all`で全デッキぶんを並行取得するよう修正し、待ち時間を「一番遅い1件ぶん」に収めた。
 - **`buildChoiceEntry`のソート効率化**：`[...pool].sort((a, b) => _distractorScore(correct, b) - _distractorScore(correct, a))`は比較のたびにスコアを再計算する（`O(n log n)`回呼ばれる）ため、候補が多い（最大40件）デッキほど無駄が大きい。各候補のスコアを先に1回だけ計算してから並べ替える（decorate-sort-undecorate）方式に変更。学習開始前に同期的に呼ばれる関数なので、体感の学習開始速度に直接影響する。
 - **選択肢欄の防御的クリア**：4択にできないカードへ切り替わったとき、`#study-choices`のDOM（前のカードの選択肢ボタン、`onclick`が前のカードのインデックスに紐づいたまま）を残さずクリアするようにした。現状`choiceWrap`が`display:none`で隠すため実害は無いが、将来この欄を`renderStudyChoices`を経由せず再表示する変更が入った場合に、古いカードの選択肢が誤って押せてしまう事故を防ぐ。
+
+### 9-7. クイズ過去問デッキの完走：スコア・ランキング・「← 前へ」との整合性（2026/08/27）
+
+3.0節の通り専用画面を廃止したため、デッキ完走後のスコア表示・サーバーへの送信・ランキング取得も`renderStudyCard`の完了分岐（`studyIdx >= studyCards.length`）へ統合されている。
+
+```js
+if (studyIdx >= studyCards.length) {
+  // …略（進捗クリア・完了記録・renderInProgressUIは通常デッキと共通）…
+  const rankEl = document.getElementById('study-done-rank');
+  document.getElementById('study-done-leaderboard').innerHTML = '';
+  if (studyIsQuizDeck) {
+    const scoreCount = [...studyQuizAnswers.values()].filter(Boolean).length;
+    document.getElementById('study-done-sub').textContent = `${scoreCount} / ${studyCards.length} 問正解！`;
+    rankEl.style.display = '';
+    submitQuizArchiveScoreForStudy(studyDeckId, scoreCount, studyCards.length);
+  } else {
+    document.getElementById('study-done-sub').textContent = `全 ${studyCards.length} 問完了！`;
+    rankEl.style.display = 'none';
+    rankEl.textContent = '';
+  }
+  return;
+}
+```
+- **スコアは加算式のカウンタではなく`studyQuizAnswers`（cardKey→正誤のMap）から都度数え直す**設計になっている。理由は「← 前へ」ボタン——クイズ過去問デッキでも通常デッキと全く同じ`study-nav`をそのまま使っているため、答えた後のカードに何度でも戻れる——との整合性。もし単純に「正解したら+1」というカウンタにしていた場合、同じカードに「← 前へ」で戻って答え直すたびに二重・三重に加点されてしまう。`finishStudyChoiceAnswer`（9-4節）は毎回`studyQuizAnswers.set(cardKey(card), isCorrect)`で**同じカードのキーを上書き**するだけなので、答え直しても最新の判定1回分としてしか数えられない。
+- `study-done-sub`（通常デッキでは「全N問完了！」の固定文言）を、クイズ過去問デッキでは「◯ / N 問正解！」というスコア表示として流用している。専用の別要素を新設せず、既存の要素を条件分岐で使い回すことで、通常デッキとの見た目の統一（「編集ボタンだけ消して、それ以外は同じ画面」）を保っている。
+- `study-done-rank`・`study-done-leaderboard`（新設要素。`study-done`内、`study-done-sub`の直後）は、クイズ過去問デッキのときだけ表示する。`submitQuizArchiveScoreForStudy(deckId, score, total)`は`Cardmaker-quizplay.js`（遅延読み込みチャンク。詳細は[11_遅延読み込みチャンク_一覧表示とクイズ再生.md](11_遅延読み込みチャンク_一覧表示とクイズ再生.md)）に定義されており、この2つのidへ直接描画する。呼び出しはawaitせず「投げっぱなし」（結果を待たずに完了画面自体はすぐ表示する）。
+- `shuffleStudy()`（「もう一度」ボタン、およびトップバーのシャッフルボタン）も、`studyIsQuizDeck`なら`studyQuizAnswers`を空の`Map`にリセットするよう変更した。シャッフル＝`studyIdx`を0に戻す「やり直し」なので、正誤記録だけ古いまま残ると、シャッフル後にまだ答えていないカードの分まで前回の判定がスコアに混ざってしまう。
+- キーボードショートカット（8節）のスペースキー判定`inChoiceMode`も、`studyFourChoice && studyChoicesMap.has(...)`から`!!currentStudyChoiceEntry(curCard)`に一般化されている。
+- ★ 教訓：AI4択のバックグラウンド強化（9-3節、`scheduleFourChoiceAiEnhancement`）が表示中のカードの選択肢をその場で差し替える箇所（`renderStudyChoices(studyChoicesMap.get(key))`）は、`renderStudyChoices`が受け取る形が`{choices, correctIndex}`から`{choices, correctIndices}`（9-4節）に変わったことで見落としがちなバグになっていた。`renderStudyChoices(currentStudyChoiceEntry(card))`に直して解消した——**関数の入力の形を変えるリファクタでは、その関数を呼んでいる箇所を全数`grep`で洗い出す**という、このプロジェクトで何度も出てきた教訓が再び当てはまる例。
 
 ---
 

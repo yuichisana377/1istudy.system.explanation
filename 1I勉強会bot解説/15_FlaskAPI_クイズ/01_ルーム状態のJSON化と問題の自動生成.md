@@ -221,6 +221,14 @@ def _build_deck_questions(deck_filenames, num_questions):
 ```
 - `n = max(1, min(n, QUIZ_MAX_QUESTIONS, len(cards)))`… 出題数を「1問以上」「上限30問（`QUIZ_MAX_QUESTIONS`）以内」「実際に使えるカード数以内」の3つの制約すべてに収まるよう調整します。
 - `random.sample(cards, n)`で、実際に出題するカードをランダムに選びます。
+
+### 4.1 追記（2026/08/27）：不正解を元デッキへ裏で「わからない」として記録するための参照
+
+ユーザーから「みんなでクイズで間違えたものもひっそりわからないつけておいて（表面上には表示せず内部で）」との要望を受け、`cards`収集時（181行目のブロック）に各カードへ`_src_deck_filename`（そのカードが属するデッキのファイル名）・`_src_card_id`（`card.get("id")`。idの無い古いカードは`None`のまま＝対象外）を控えるようにし、`questions.append(...)`（216行目）にも`"source_deck_filename"`・`"source_card_id"`として引き継ぐようにした。
+
+- これらのキーは**Webクライアントには一切送らない**（`question_payload`＝`{"question": ..., "choices": ...}`には含めていない）。目的は[03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)の`/quiz_answer`が不正解時に参照するためだけで、あくまでサーバー内部の記録用。
+- ローカルAI（Ollama）による誤答強化（後述7節、`_ai_pick_quiz_distractors`）は`new_questions[i] = {...}`で問題dictを作り直すため、ここでも同じ2キーを引き継ぐよう修正してある（引き継がないと、AI強化が効いた問題だけ「わからない」の裏付けができなくなる）。
+- ホストが手入力した「オリジナル4択」（`_validate_manual_questions`、`source=="manual"`）には元カードという概念自体が無いため、この2キーは付けない（`quiz_answer`側もNoneチェックで自動的に対象外になる）。
 - 各カードについて、`pool`（そのカード以外の、正解と異なる解答の集合。`dict.fromkeys(...)`は順序を保ったまま重複除去する、リスト内包の`set`版に近いテクニック）を作り、[3. 見分けにくい誤答の生成：`_pick_distractors`（4953〜4976行）](#3-見分けにくい誤答の生成pick_distractors49534976行)の`_pick_distractors`で3つの誤答を選びます。
 - `choices = _pick_distractors(...) + [correct]`で4つの選択肢を作り、`random.shuffle(choices)`でシャッフルしてから、`correct_index`（正解が何番目に来たか）を記録します。この時点ではまだ、誰が見ても正解が分からないよう、正解の位置自体もランダムです。
 

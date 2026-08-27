@@ -219,6 +219,13 @@ def quiz_answer():
             player["score"] += points
         room["last_activity"] = now
         _quiz_autoadvance_locked(room, now)
+        # ★ 追加（2026/08/27）：「デッキから自動作成」の問題を不正解だった場合、
+        #   元のCardMakerデッキへ裏で「わからない」を付けておく。
+        mark_unsure_target = None
+        if not correct and q.get("source_deck_filename") and q.get("source_card_id"):
+            mark_unsure_target = (q["source_deck_filename"], q["source_card_id"])
+    if mark_unsure_target:
+        _silently_mark_unsure(guild_id, student_id, *mark_unsure_target)
     notify_change(guild_id)
     return jsonify({"ok": True})
 ```
@@ -228,6 +235,8 @@ def quiz_answer():
 - **★ 追加：`cur_answered_at`・`total_answer_time`**。回答した時刻をその問題ごとに記録（`cur_answered_at`、次の問題が始まるとリセットされる）するのに加え、回答にかかった時間（`now - room["question_started_at"]`、正誤にかかわらず）を`total_answer_time`に積算していきます。前者は正解発表(reveal)中のミニ順位表の並び順（押した順）に、後者はスコアが同点だったときの全体順位のタイブレークに使われます。
 - `if room["first_correct_id"] is None:`… その問題での「一番最初の正解者」だけにボーナス（`QUIZ_FIRST_CORRECT_BONUS`）が付きます。`first_correct_id`が既に埋まっていれば（誰か他の人が先に正解していれば）、このボーナス判定はスキップされます。
 - `_quiz_autoadvance_locked(room, now)`… コメントの通り、この回答によって「全員が回答し終わった」場合、次のポーリングを待たずに、その場で正解発表（`reveal`）へ進めます。これも「体感の速さ」のための工夫で、[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)で見た`_quiz_scheduler_loop`（0.15秒ごとの自動チェック）と合わせて、**あらゆる場面でできるだけ素早く状態を進行させる**という一貫した設計方針が表れています。
+- **★ 追加（2026/08/27）：不正解を元デッキへ裏で「わからない」として記録**。「デッキから自動作成」（`source=="deck"`）のクイズは、問題を組み立てた時点（`_build_deck_questions`）で元カードの`(deck_filename, card_id)`を`q`に控えており（Web側には一切送らない、`question_payload`にも含めない）、不正解なら`mark_unsure_target`にその参照を控えておきます。ファイルI/O（学習データの読み書き）はルーム（`QUIZ_ROOMS_LOCK`）を持ったまま行うと他のプレイヤーの操作を待たせてしまうため、**ロックを抜けてから**`_silently_mark_unsure()`を呼びます。ホストが手入力した「オリジナル4択」（`source=="manual"`）はそもそも元カードが存在しないため対象外です。
+- `_silently_mark_unsure(guild_id, student_id, deck_filename, card_id)`（新設）は、`/save_unsure`（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)近辺ではなくCardMaker側の解説参照）と同じ`update_student_study_data`（読み込み→書き換え→保存を、競合時は最新を読み直して再試行する安全な更新処理）を使い、対象デッキの`unsure`配列に`card_id`が無ければ追加するだけです。`deck_filename`/`card_id`は、CardMaker側の`studyDataDeckKey()`（公開デッキは`filename`そのもの）・`cardKey()`（`id`優先）と同じキー形式になるよう揃えてあるため、次にCardMakerでそのデッキを開くと、何も操作していないのに該当カードが「わからない」として表示されます（Quiz.js側の画面には何の変化も出ません）。失敗してもクイズの進行自体は止めないベストエフォートです。
 
 ## 6. `/quiz_end`：クイズの手動終了（5517〜5536行）
 
