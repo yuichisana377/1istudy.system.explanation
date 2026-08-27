@@ -16,7 +16,7 @@
 | `screen-host-setup` | ホスト：セットアップ | タイトル・問題の作り方・途中参加可否などを設定 |
 | `screen-host-lobby` | ホスト：ロビー | 参加者を待つ画面 |
 | `screen-countdown` | カウントダウン | スタート直後の「まもなく始まります」 |
-| `screen-intro` | 「第N問」表示 | 毎問の直前に一瞬映る |
+| `screen-intro` | 「第N問」表示 | 毎問の直前に一瞬映る。★ 2026/08/27〜、弾むポップイン＋背後に広がって消える光の輪（`.qz-intro-ring`）のモーション付き（Quiz.css） |
 | `screen-host-play` | ホスト：出題中/結果発表 | ホストも参加者として回答する |
 | `screen-player-play` | プレイヤー：出題中 | 参加者用の出題画面 |
 | `screen-result` | 結果発表 | 最終順位（ホスト・参加者共通） |
