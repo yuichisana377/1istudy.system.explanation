@@ -463,6 +463,40 @@ studyDataCache = { ... };
 
 同じ強化を、[05_Cardmaker.js_その5](05_Cardmaker.js_その5_ホーム画面のドラッグ並び替え.md)で解説した`fetchAndMergeOrder`（並び順の同期）にも適用した。
 
+#### さらに追記（同日）：「わかる率」が付けたり外したりするうちにどんどん下がる不具合
+
+「わからないを付けたり外したりしていると、わかる率がどんどん下がっていく（外しても戻らない）」という報告を受けて、さらに深掘りした。「わかる率」（`/deck_understanding`）は常にその時点の`seen`（学習済み）と`unsure`（わからない、現在マーク中のものだけ）から**都度計算し直す**設計（[19_FlaskAPI_学習進捗データ](../../1I勉強会bot解説/19_FlaskAPI_学習進捗データ/00_解説.md)参照。累積ではなく、常に「今マークされているかどうか」の割合）なので、`unsure`の中身さえ正しければ外した瞬間に率も戻るはずだった。
+
+原因は`pushStudyDataToServer`が**直列化されていなかった**こと。「わからない」をONにしてすぐOFFにする、といった短時間の連続操作では、2つの`POST /save_unsure`リクエストがほぼ同時に発行される。`fetch()`はブラウザ・ネットワークの都合で発行順どおりに完了するとは限らず、サーバー側もFlaskのスレッドで並行に処理するため、**先に発行した「ONにする」リクエストの処理が、後から発行した「OFFにする」リクエストより遅れて完了する**（＝追い越す）ことがあった。`/save_unsure`はサーバー側で該当デッキの`unsure`配列を**丸ごと置き換える**方式（差分適用ではない）なので、追い越しが起きると「OFFにする」の結果を「ONにする」が後から上書きしてしまい、外したはずのマークが復活する。これが繰り返されると、外す操作が確率的に効かなくなっていき、率が下がる方向にだけ偏っていく。
+
+同じ生徒のファイルへの保存はすべて`pushStudyDataToServer`を通るため、ここで直列化（前回の送信が完全に完了するまで次を送信しない）するよう修正した：
+
+```js
+let _studyDataPushChain = Promise.resolve();
+
+async function pushStudyDataToServer(path, body) {
+  const session = getLoginSession();
+  if (!session || !session.session_token) return false;
+  const waitForTurn = _studyDataPushChain.catch(() => {});
+  let myTurnDone;
+  _studyDataPushChain = new Promise(resolve => { myTurnDone = resolve; });
+  await waitForTurn;
+  const promise = _pushStudyDataToServerImpl(path, body);
+  _pendingStudyDataPushes.push(promise);
+  try {
+    return await promise;
+  } finally {
+    _pendingStudyDataPushes = _pendingStudyDataPushes.filter(p => p !== promise);
+    myTurnDone();
+  }
+}
+```
+
+- 呼ばれるたびに「自分の番」を表す新しいPromise（`myTurnDone`で解決する）を`_studyDataPushChain`にセットし直し、**前回の番**（`waitForTurn`）が終わるまで`await`で待ってから実際の送信に入る、という数珠つなぎ（チェーン）方式。これにより、発行した順番どおりにしかサーバーへ届かなくなる（前の送信が完全に終わる＝レスポンスまで受け取るまで、次の送信を開始すらしない）。
+- `.catch(() => {})`は保険（`_pushStudyDataToServerImpl`自体は例外を投げない設計だが、万一チェーンのどこかが失敗しても後続の番待ちが永久に詰まらないようにするため）。
+- 同じ理由で`pushSharedOrderToServer`（並び順、[05_Cardmaker.js_その5](05_Cardmaker.js_その5_ホーム画面のドラッグ並び替え.md)参照）にも同じ直列化を適用した。
+- ★ この修正は同じブラウザタブ内での連続操作を対象にしたもの。複数端末・複数タブから同時に同じ生徒のデータを書き換えるケース（稀）まで完全に順序保証するには、サーバー側にもより厳密な仕組みが必要になるが、今回報告された「同じ画面内で付けたり外したりする」という使い方に対しては、これで解消する。
+
 以下は修正前のオリジナル実装（考え方は同じ）：
 
 ```js
