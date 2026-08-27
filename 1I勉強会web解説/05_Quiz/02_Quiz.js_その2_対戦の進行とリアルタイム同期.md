@@ -185,7 +185,8 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
     if (room.your_correct) {
       const bonus = room.first_correct_nickname === STUDENT.nickname;
       feedbackEl.className = 'qz-answer-feedback ok';
-      feedbackEl.innerHTML = bonus ? (Icons.html('celebrate', {size:15}) + ' 正解！一番乗りボーナスで +12点！') : (Icons.html('checkCircle', {size:15}) + ' 正解！ +10点');
+      const pointsText = room.your_points != null ? room.your_points : (bonus ? 12 : 10);
+      feedbackEl.innerHTML = bonus ? (Icons.html('celebrate', {size:15}) + ` 正解！一番乗りボーナスで +${pointsText}点！`) : (Icons.html('checkCircle', {size:15}) + ` 正解！ +${pointsText}点`);
     } else {
       feedbackEl.className = 'qz-answer-feedback ng';
       feedbackEl.innerHTML = Icons.html('wrong', {size:15}) + ' 不正解…';
@@ -205,6 +206,7 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
   }
 ```
 - 「正解した（かつ一番乗りだった）」「正解した（一番乗りではない）」「不正解」「時間切れで未回答」「回答済みで発表待ち」「未回答」という、いくつものパターンを網羅的に出し分けています。正解の基本点は10点、一番乗りボーナスは+2点（合計12点）と、HTMLのヒーロー文言（`正解10点、一番早く正解すると+2点`）と一致する数値がここに実装されています。
+- ★ 修正（2026/08/27）：`pointsText`は元々`bonus ? 12 : 10`という固定値だったが、ホストの詳細設定「ボーナス問題」（得点2倍、[00_クイズルームの設計とヘルパー関数.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/00_クイズルームの設計とヘルパー関数.md)参照）が効いた問題では実際の加点（20点・24点）と表示が食い違ってしまっていた（「ちゃんと2倍になってるんだけど、表示が+12になってしまっている」との報告）。サーバー側が計算した実際の加点（`room.your_points`、`quiz_answer`の`player["cur_points"]`をそのまま返したもの）を使うようにし、`your_points`が来ていない場合（後方互換・念のため）だけ従来通りの固定値にフォールバックする。
 
 ### 3.5 正解発表パネル（774〜785行）
 ```js

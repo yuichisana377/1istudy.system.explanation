@@ -221,6 +221,7 @@ def quiz_answer():
             if room["current_q"] in room.get("bonus_indices", set()):
                 points *= 2
             player["score"] += points
+            player["cur_points"] = points  # ★ 追加：正解発表の「+○点」表示に使う実際の加点
         room["last_activity"] = now
         _quiz_autoadvance_locked(room, now)
         # ★ 追加（2026/08/27）：「デッキから自動作成」の問題を不正解だった場合、
@@ -239,6 +240,7 @@ def quiz_answer():
 - **★ 追加：`cur_answered_at`・`total_answer_time`**。回答した時刻をその問題ごとに記録（`cur_answered_at`、次の問題が始まるとリセットされる）するのに加え、回答にかかった時間（`now - room["question_started_at"]`、正誤にかかわらず）を`total_answer_time`に積算していきます。前者は正解発表(reveal)中のミニ順位表の並び順（押した順）に、後者はスコアが同点だったときの全体順位のタイブレークに使われます。
 - `if room["first_correct_id"] is None:`… その問題での「一番最初の正解者」だけにボーナス（`QUIZ_FIRST_CORRECT_BONUS`）が付きます。`first_correct_id`が既に埋まっていれば（誰か他の人が先に正解していれば）、このボーナス判定はスキップされます。
 - **★ 追加（2026/08/27）：`bonus_indices`による得点2倍**。ホストの詳細設定「ボーナス問題」（[02_ルーム作成と過去問ランキング.md](02_ルーム作成と過去問ランキング.md)の1.1節で、作成時に一度だけ抽選・固定される`room["bonus_indices"]`）に、今の問題番号（`room["current_q"]`）が含まれていれば、一番乗りボーナスまで含めた合計を`*2`する。掛け算は`player["score"] += points`の**直前**、つまり基本点・一番乗りボーナスの両方を足し終えた後に行うため、「10点問題でボーナス」なら12点（10+2）→24点、「ボーナスでない一番乗り」なら12点のまま、という素直な「まるごと2倍」になる。
+- **★ 追加（同日・不具合修正）：`player["cur_points"]`**。Web側の正解発表フィードバック（[../../1I勉強会web解説/05_Quiz/02_Quiz.js_その2_対戦の進行とリアルタイム同期.md](../../1I勉強会web解説/05_Quiz/02_Quiz.js_その2_対戦の進行とリアルタイム同期.md)）は、以前「+10点」「+12点」という固定文言を出していたため、ボーナス問題で実際は+20点/+24点なのに表示だけ古いままという不一致が起きていた（「ちゃんと2倍になってるんだけど、表示が+12になってしまっている」との報告）。`points`を確定した直後に`player["cur_points"] = points`として控えておき、`_quiz_room_snapshot`のreveal中スナップショットで`your_points`としてクライアントへそのまま渡すことで、表示側が倍率計算を再現する必要が無いようにした（サーバー側の実際の計算結果を1箇所に集約し、表示はそれをそのまま出すだけにする、という設計）。`cur_answer`/`cur_correct`と同じ3箇所（player初期化2箇所・reveal→次の問題への遷移時のリセット）で一緒にリセットする。
 - `_quiz_autoadvance_locked(room, now)`… コメントの通り、この回答によって「全員が回答し終わった」場合、次のポーリングを待たずに、その場で正解発表（`reveal`）へ進めます。これも「体感の速さ」のための工夫で、[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)で見た`_quiz_scheduler_loop`（0.15秒ごとの自動チェック）と合わせて、**あらゆる場面でできるだけ素早く状態を進行させる**という一貫した設計方針が表れています。
 - **★ 追加（2026/08/27）：不正解を元デッキへ裏で「わからない」として記録**。「デッキから自動作成」（`source=="deck"`）のクイズは、問題を組み立てた時点（`_build_deck_questions`）で元カードの`(deck_filename, card_id)`を`q`に控えており（Web側には一切送らない、`question_payload`にも含めない）、不正解なら`mark_unsure_target`にその参照を控えておきます。ファイルI/O（学習データの読み書き）はルーム（`QUIZ_ROOMS_LOCK`）を持ったまま行うと他のプレイヤーの操作を待たせてしまうため、**ロックを抜けてから**`_silently_mark_unsure()`を呼びます。ホストが手入力した「オリジナル4択」（`source=="manual"`）はそもそも元カードが存在しないため対象外です。
 - `_silently_mark_unsure(guild_id, student_id, deck_filename, card_id)`（新設）は、`/save_unsure`（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)近辺ではなくCardMaker側の解説参照）と同じ`update_student_study_data`（読み込み→書き換え→保存を、競合時は最新を読み直して再試行する安全な更新処理）を使い、対象デッキの`unsure`配列に`card_id`が無ければ追加するだけです。`deck_filename`/`card_id`は、CardMaker側の`studyDataDeckKey()`（公開デッキは`filename`そのもの）・`cardKey()`（`id`優先）と同じキー形式になるよう揃えてあるため、次にCardMakerでそのデッキを開くと、何も操作していないのに該当カードが「わからない」として表示されます（Quiz.js側の画面には何の変化も出ません）。失敗してもクイズの進行自体は止めないベストエフォートです。
