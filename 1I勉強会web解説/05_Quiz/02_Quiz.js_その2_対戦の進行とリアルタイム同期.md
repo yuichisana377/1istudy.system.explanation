@@ -136,15 +136,24 @@ if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dat
 ```
 - 選択肢ボタン自体は、**問題が変わったとき（または初回）だけ**作り直します。`choicesEl.dataset.built`に「今表示している選択肢がどの問題番号のものか」を記録しておき、それと今回のデータの`current_q`が一致していれば、ボタンの再構築自体をスキップします。400msごとの高頻度なポーリングのたびに、変わっていない部分までDOMを作り直すのは無駄なので、必要なとき（問題が切り替わったとき）だけに絞る最適化です。
 
-★ 追加（2026/08/27）：「選択肢は下ぞろえにしてほしい（したすぎると端末によっては隠れてしまうので注意）。結果発表はいまのまま」との要望を受け、正解発表前だけ選択肢を画面下側へ寄せるようにした。
+★ 追加（2026/08/27）：「選択肢は下ぞろえにしてほしい（したすぎると端末によっては隠れてしまうので注意）。結果発表はいまのまま」との要望を受け、正解発表前だけ選択肢を画面下側へ寄せるようにした。初版は選択肢欄自体に`margin-top:auto`を付ける方式だったが、直後に「ボタンの位置はパッと切り替えずにスライドしていくように」との追加要望があり、`margin-top:auto`はCSSトランジションで滑らかに補間できない（`auto`は本質的にアニメーション不可な値）ため、専用の空要素（`.qz-choice-spacer`）の`flex-grow`をトグルする方式に作り直した。
 ```js
-choicesEl.classList.toggle('qz-choices-bottom', !revealed);
+const choiceSpacerEl = choicesEl.previousElementSibling;
+if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
+  choiceSpacerEl.classList.toggle('qz-choices-bottom', !revealed);
+}
 ```
 ```css
-.qz-choice-grid.qz-choices-bottom{ margin-top:auto; }
+.qz-choice-spacer{ flex-grow:0; transition:flex-grow .35s ease; }
+.qz-choice-spacer.qz-choices-bottom{ flex-grow:1; }
 ```
-- `.qz-body`は`flex-direction:column`なので、選択肢欄に`margin-top:auto`を付けると、その要素より**上**にある余白（＝問題文が短くて余っている分）を全部吸収して自分自身を下へ押しやる。選択肢より下にある要素（正解発表パネル等）は選択肢に付いてくる形になるので、順序・間隔自体は変わらない。
-- 「したすぎると端末によっては隠れてしまう」という懸念への対処が、実はこの手法の肝。`auto`マージンは**実際に余っている分だけ**しか広がらない性質を持つ。つまり問題文が長い・画面が低いなどで余白がそもそも無い場合は自動的に0へ縮み、今まで通りの詰めた配置に戻るだけで、無理に画面外へ押し出されることは無い。特別な分岐やメディアクエリを書かずに、CSSの標準的な性質だけで安全側に倒れる設計になっている。
+- `<div class="qz-choice-spacer">`は問題文（`qz-question-text`）と選択肢欄（`qz-choice-grid`）の間に置かれた、中身が空のdiv。`.qz-body`は`flex-direction:column`なので、この要素の`flex-grow`を0→1にすると、余っている縦方向の空間（＝問題文が短くて余っている分）をこの要素が独り占めして伸び、結果として選択肢欄より下（選択肢・正解発表パネル等）が一塊のまま下へ押しやられる。`flex-grow`は数値（`<number>`）なので`margin:auto`と違いCSSトランジションで正しく補間され、正解発表の前後でスーッとスライドする。
+- 「したすぎると端末によっては隠れてしまう」という懸念への対処が、実はこの手法の肝。`flex-grow`は**実際に余っているスペースの範囲内でしか**伸びない性質を持つ（他の要素を強制的に縮めてまでスペースを作ったりはしない）。つまり問題文が長い・画面が低いなどで余白がそもそも無い場合は自動的に0のまま＝今まで通りの詰めた配置になるだけで、無理に画面外へ押し出されることは無い。特別な分岐やメディアクエリを書かずに、CSSの標準的な性質だけで安全側に倒れる設計になっている（`margin:auto`版でも成り立っていた性質で、`flex-grow`版に切り替えても維持されている）。
+- 選択肢欄自体のidは`choicesId`（`opts`経由でホスト/参加者それぞれの実IDが渡ってくる）だが、隣に置いた`.qz-choice-spacer`には専用のidを振らず、`choicesEl.previousElementSibling`（＝HTML上で選択肢欄の直前に置かれた要素）で辿っている。ホスト画面・参加者画面どちらのHTMLでも「質問文→spacer→選択肢欄」の順に並べてあることが前提。
+
+同じタイミングで「まだスワイプできちゃう。ボタンちょっとしたすぎ」との指摘も受け、Quiz.cssを2点調整した：
+- `body.qz-fixed-screen`（出題画面・途中経過画面の表示中だけ付く、`showScreenQ`参照）に`touch-action:none`を追加。`overflow:hidden`・`overscroll-behavior`（`html`側で全ページ共通に設定済み）だけでは、iOS Safari等でタッチのスワイプ操作そのもの（弾む・わずかに動く挙動）を止めきれない端末があったための、より強い指定。途中経過の参加者一覧（`.qz-scroll-list`）だけは人数が多い場合に備えて`touch-action:pan-y`で縦スワイプを明示的に許可し直している。
+- 出題画面の`.qz-body`の下側パディングに`env(safe-area-inset-bottom, 0px)`を追加（`calc(1.25rem + env(safe-area-inset-bottom, 0px))`）。選択肢を下寄せするようになったことで、ホームインジケーター等のセーフエリアに選択肢が近づきすぎる端末があったための対応。
 - 正解発表（`revealed`）になったらこのクラスを外し、今まで通りの配置に戻す（「結果発表はいまのまま」という要望通り、見た目を変えないため）。
 
 ### 3.3 選択肢の見た目の更新（726〜743行）
