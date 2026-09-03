@@ -327,6 +327,38 @@ var members = Object.keys(memberIds).map(function(id) {
 
 このあとの「みんなの勉強ログ」欄（logs全件の一覧）は、7節の`renderLogs()`とほぼ同じ組み立てですが、こちらは全ユーザー分を対象にし、削除ボタンはありません（自分以外のログは削除できないため）。
 
+### 8.1 現在学習中（★ 追加：2026/09/03）
+
+「みんなの記録」カードの先頭には、勉強タイマーを計測中(`state === "running"`)のメンバーを一覧表示する「現在学習中」欄がある。サーバー側の実装は[../../1I勉強会bot解説/04_勉強タイマー/00_勉強タイマーの状態管理.md](../../1I勉強会bot解説/04_勉強タイマー/00_勉強タイマーの状態管理.md)の8節（`/studying_now`）を参照。
+
+```js
+async function loadStudyingNow() {
+  try {
+    var data = await api("/studying_now?guild_id=" + GUILD_ID);
+    studyingNow = data.ok ? (data.studying || []) : [];
+  } catch(e) { studyingNow = []; }
+}
+
+function renderStudyingNow() {
+  var el = document.getElementById("studying-now-list");
+  if (!el) return;
+  if (!studyingNow.length) {
+    el.innerHTML = '<div class="sl-rank-empty">現在学習中の人はいません</div>';
+    return;
+  }
+  el.innerHTML = '<div class="sl-studying-list">' +
+    studyingNow.map(function(s) {
+      var nickname = nicknameMap[s.student_id] || s.nickname || s.student_id;
+      var youBadge = s.student_id === STUDENT.id ? '<span class="sl-you-badge">あなた</span>' : "";
+      return '<span class="sl-studying-chip"><span class="sl-studying-dot"></span>' + esc(nickname) + youBadge + '</span>';
+    }).join("") +
+  '</div>';
+}
+```
+- `loadStudyingNow()`はサーバーから`{student_id, nickname}`の配列を取得するだけ、`renderStudyingNow()`は誰もいなければ他のランキング欄などと同じ`.sl-rank-empty`（「現在学習中の人はいません」）を表示し、いれば緑色のチップ（`.sl-studying-chip`、CSSのアニメーションで点滅する`.sl-studying-dot`付き）を並べる。自分自身には6節の`rankHTML`と同じ`.sl-you-badge`（「あなた」）を流用している。
+- `renderStudyingNow()`は`renderAll()`の最後（`renderEveryone(wl, tot)`の直後）から呼ばれる。`loadStudyingNow()`自体は初回読み込み時と、後述の`refreshWatchedData()`の両方から呼ばれる。
+- **他の4種類の監視対象と同じ仕組みに相乗り**：`checkForUpdates()`（後の回で解説する10秒ポーリング＋SSE）が監視するハッシュ対象（`list_schedule`/`list_study_logs`/`get_points`/`get_completed_tasks`）に`/studying_now`も加えてある。誰かがタイマーを開始/停止する（＝`study_timers_{guild_id}.json`が変わり`notify_change`が呼ばれる）たびにSSEで即座に届いた変更通知をきっかけに、この一覧も他端末含めて自動的に更新される。
+
 ---
 
 ## 9. 課題一覧（950〜1022行）
