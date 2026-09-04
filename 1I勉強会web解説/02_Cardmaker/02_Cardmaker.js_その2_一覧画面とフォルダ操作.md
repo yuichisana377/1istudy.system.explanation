@@ -73,11 +73,15 @@ if (skeleton) skeleton.style.display = 'none';
   </div>` };
   }
 
+  // ★ 追加：フォルダの説明（設定されている場合だけ、1行に省略して表示）
+  const folderDescLine = f.description
+    ? `<div class="deck-card-desc">${esc(f.description)}</div>` : '';
   return { key: `folder:${f.id}`, html: `
   <div class="deck-card folder-card" data-key="folder:${f.id}" onclick="openFolder('${f.id}')">
     <div class="deck-card-info">
       <div class="deck-card-title">${Icons.cmHtml('folder', {size:15})} ${esc(f.name)}</div>
       <div class="deck-card-meta">${cnt} デッキ・${totalCards} 問${folderUnsureBadge}</div>
+      ${folderDescLine}
     </div>
     <div class="deck-card-actions">
       <button class="btn btn-blue btn-sm" onclick="event.stopPropagation();openFolderPlayMode('${f.id}')"
@@ -91,6 +95,7 @@ if (skeleton) skeleton.style.display = 'none';
 - **クイズ用デッキ選択モード（`pickMode`）中は特別な見た目**：通常の「▶プレイ」「メニュー」ボタンの代わりに、チェックボックス風の見た目でフォルダ全体を選択できるようにします。選択対象にできるデッキが1件も無いフォルダはグレーアウト（`disabled`）。
 - 通常モードでは、フォルダ名・件数に加えて「▶プレイ」ボタン（フォルダ内を一括で学習）と「メニュー」ボタン（名前変更・移動・削除）を表示します。
 - それぞれのフォルダに`key: 'folder:フォルダID'`という並び順管理用のキーを持たせています。
+- ★ 追加：`f.description`（フォルダの説明欄、任意）が設定されていれば、`.deck-card-desc`として件数の下に1行だけ（`text-overflow: ellipsis`で省略）表示します。`esc()`を通してから`innerHTML`テンプレートに入れているのは、他のユーザー入力（フォルダ名等）と同じXSS対策です。同じ説明は、フォルダを実際に開いているときはパンくずリストの下（`renderBreadcrumb()`、後述）にも全文表示されます。編集はフォルダ名の入力モーダル（5.3節）から行います。
 
 ### 1.4 デッキのカードを組み立てる（885〜1001行）
 
@@ -201,6 +206,9 @@ if (skeleton) skeleton.style.display = 'none';
     </div>` };
     }
 
+    // ★ 追加：デッキの説明（設定されている場合だけ、1行に省略して表示）
+    const deckDescLine = d.description
+      ? `<div class="deck-card-desc">${esc(d.description)}</div>` : '';
     return { key: orderKey, html: `
     <div class="deck-card" data-key="${orderKey}">
       <div class="deck-card-info">
@@ -213,6 +221,7 @@ if (skeleton) skeleton.style.display = 'none';
           ${choiceModeBadge}
           ${unsureBadge}
         </div>
+        ${deckDescLine}
       </div>
       <div class="deck-card-actions">
         <button class="btn btn-blue btn-sm" onclick="openPlayMode('${d.id}')"
@@ -229,6 +238,7 @@ if (skeleton) skeleton.style.display = 'none';
 - **「選択式」バッジ**：多肢選択デッキ（`d.choiceMode`）であれば表示。ただし「クイズ過去問」バッジと意味が重複するため、そちらが出ているときはこちらは出しません。
 - **プレイボタンの無効化条件**：問題数0、読み込み中、または「作成中」（＝一度も公開フローを経ていない）状態のいずれかに該当すればプレイ不可（`playDisabled`）。**編集はこのフラグを見ないので、作成中でも編集は引き続き可能**、という注記もあります。
 - **科目名の重複表示回避**：デッキ名の先頭に科目名がそのまま含まれている場合（例：「数学 二次関数」）、表示名からその部分を取り除いて、科目名は別枠（`subjectLabel`）で表示するようにしています。
+- ★ 追加：`d.description`（デッキの説明欄、任意）が設定されていれば、フォルダカードと同じ`.deck-card-desc`（1行に省略表示）として`.deck-card-meta`の下に表示します。編集はデッキメニューの「デッキ名を変更する」から開く`modal-rename`モーダルで行います（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「デッキ名・説明の変更」参照）。
 - **並び順キー（`orderKey`）**：公開済みデッキは全員が同じ`filename`を持つので、それを共有キー（`deck:ファイル名`）にします。未公開デッキは他人には見えないデータなので、この端末専用のキー（`localdeck:内部ID`）にし、サーバーには送りません。
 - こちらもクイズ用デッキ選択モード中は、通常のボタンの代わりにチェックボックスの見た目に切り替わります。
 
@@ -259,17 +269,31 @@ if (skeleton) skeleton.style.display = 'none';
 ```js
 function renderBreadcrumb() {
   const bar = document.getElementById('folder-breadcrumb');
-  if (!currentFolderId) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const descBox = document.getElementById('folder-desc');
+  if (!currentFolderId) {
+    bar.style.display = 'none'; bar.innerHTML = '';
+    descBox.style.display = 'none'; descBox.textContent = '';
+    return;
+  }
   const chain = [];
   let cur = folders.find(f => f.id === currentFolderId);
   while (cur) { chain.unshift(cur); cur = folders.find(f => f.id === cur.parentId); }
   bar.style.display = 'flex';
   bar.innerHTML = `<span class="crumb" onclick="openFolder(null)">🏠 ホーム</span>` +
     chain.map(f => `<span class="crumb-sep">/</span><span class="crumb" onclick="openFolder('${f.id}')">${esc(f.name)}</span>`).join('');
+  // ★ 追加：今開いているフォルダ自身に説明が設定されていれば表示する
+  const currentFolder = folders.find(f => f.id === currentFolderId);
+  if (currentFolder && currentFolder.description) {
+    descBox.textContent = currentFolder.description;
+    descBox.style.display = '';
+  } else {
+    descBox.style.display = 'none'; descBox.textContent = '';
+  }
 }
 ```
 - 今のフォルダから親を順にたどって配列の先頭に追加していく（`chain.unshift`）ことで、「ホーム › 数学 › 二次関数」のような経路の並びを作ります。
 - ホームにいるとき（`currentFolderId`が`null`）はパンくず自体を非表示にします。
+- ★ 追加：今開いているフォルダに説明（`description`、任意）が設定されていれば、パンくずの下の`#folder-desc`に**省略せず全文**表示します（一覧のフォルダカード側は1行に省略表示、という使い分け）。`textContent`で入れているのでユーザー入力をHTMLとして解釈させない安全な組み立て方です。
 
 ```js
 function folderPathLabel(folderId) {
@@ -540,6 +564,8 @@ async function saveFolderName() {
   const name = input.value.trim();
   if (!name) { shake('folder-name-input'); return; }
   if (await warnIfBugChars(name, 'folder-name-input')) return;
+  const description = document.getElementById('folder-desc-input').value.trim(); // ★ 追加：フォルダの説明欄（任意）
+  if (description && await warnIfBugChars(description, 'folder-desc-input')) return;
 
   const btn = document.querySelector('#modal-folder-name .btn-blue');
   const targetFolder = folderNameMode === 'rename' ? folders.find(f => f.id === folderNameTargetId) : null;
@@ -547,6 +573,7 @@ async function saveFolderName() {
     guild_id: GUILD_ID,
     session_token: getLoginSession()?.session_token, // ★ 追加：変更にはログイン必須
     name,
+    description, // ★ 追加：フォルダの説明欄（任意）
     parent_id: folderNameMode === 'rename' ? (targetFolder ? targetFolder.parentId : null) : currentFolderId,
     nickname: getLoginSession()?.nickname, // ★ 追加：運用ログの実行者表示用
   };
@@ -571,6 +598,7 @@ async function saveFolderName() {
 }
 ```
 - 名前が空なら`shake()`（入力欄を左右に揺らすアニメーション、8節参照）で気づかせて中断。
+- ★ 追加：`description`（フォルダの説明欄、任意。空でもOK）も同じモーダルの`#folder-desc-input`から読み取り、`save_folder`のリクエストボディに含めます。`openFolderNameModal(mode, folderId)`は、名前変更モードでモーダルを開くとき、対象フォルダの現在の`name`と`description`を両方の入力欄に反映してから開きます（デッキ側の`modal-rename`と同じ考え方、[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)参照）。
 - `warnIfBugChars`（[08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)で説明）で、表示や処理を壊しかねない特殊文字が含まれていないかチェック。
 - `AbortSignal.timeout(8000)`は`AbortController`を使わずタイムアウトを指定する、より簡潔な書き方（8秒でタイムアウト）。
 - 成功したらサーバーの最新フォルダ一覧を取り直し、モーダルを閉じて画面を再描画。失敗したら`try/catch`で捕まえてエラーダイアログを表示（`finally`でボタンのローディング状態を必ず解除）。

@@ -71,12 +71,14 @@ async function openPlayMode(deckId) {
   }
 ```
 - ここでも「保留中の同期を待つ→強制的に最新カードを取得」という同じ順序が守られています。失敗した場合は、`while`ループで何度でも「もう一度試す」を選べるようにしています。
+- ★ 追加：`setPlayModeDesc(text)`（Cardmaker.js末尾の共通ヘルパー）は、`#play-mode-desc`の表示/非表示とテキストをまとめて切り替えるだけの小さな関数です。デッキの説明（`deck.description`、任意）が無ければ要素ごと隠すので、説明を設定していないデッキでは以前と見た目が変わりません。フォルダをまとめてプレイする場合（`openFolderPlayMode`）も同じヘルパーで`folder.description`を表示します（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)10節参照）。
 
 ```js
   document.getElementById('reverse-mode-checkbox').checked = false; // ★ プレイモード選択のたびに未チェックへリセット
   document.getElementById('auto-grade-checkbox').checked = false; // ★ 追加：自動採点トグルも未チェックへリセット
   onReverseModeToggleChange(); // ★ 追加：反転OFFなので自動採点トグルを表示状態にする
   document.getElementById('play-mode-deck-name').textContent = deck.name;
+  setPlayModeDesc(deck.description); // ★ 追加：デッキの説明があれば #play-mode-desc に表示する
   document.getElementById('play-mode-all-sub').textContent = `${deck.cards.length} 問`;
   const unsure = getUnsureSet(deckId);
   const unsureCount = deck.cards.filter(c => unsure.has(cardKey(c))).length;

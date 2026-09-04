@@ -20,6 +20,7 @@ const keepLoadedCards = existing && existing.cardsLoaded && !cachedIsStale;
 `notYetPublished`（「作成中」かどうか）と`folderId`（フォルダ所属）についても、それぞれ「この端末に記録があればそれを優先し、無ければサーバー側の情報や、旧来の判定基準にフォールバックする」という、後方互換性を意識した組み立てになっています。
 
 - **`quizArchive: !!s.quiz_archive`（2026/08/21追加）**… そのデッキがクイズ過去問由来かどうかのフラグを、サーバー側の索引（`s.quiz_archive`、[../../1I勉強会bot解説/14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)参照）からそのまま引き継ぎます。以前はこのフラグ自体が存在せず、`isDeckInFolderScope`（そのデッキが今どのフォルダにあるか）で都度判定していましたが、デッキをクイズ過去問フォルダの外へ移動できるようにしたのに伴い、位置に依存しないこの専用フィールドへ切り替わりました。4.1節の「カードを編集する」メニューの表示/非表示や、`renderDeckListUI()`のバッジ表示に使われます。
+- **`description: s.description || (existing && existing.description) || null`（★ 追加）**… デッキの説明欄（任意）。`subject`（科目）と全く同じ組み立て方（サーバー値を優先し、無ければこの端末の記録にフォールバック）です。サーバー側の索引にも`description`が含まれる（[../../1I勉強会bot解説/14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)の`_meta_from_card_data`参照）ため、一覧を取得した時点で（デッキ本体を開かなくても）説明を表示できます。
 
 最後に：
 ```js
@@ -436,7 +437,7 @@ if (planPublish) { await announceNewDeckToServer(deck.id); }
 - `notYetPublished: true`：まだ一度も「公開して保存」を経ていない状態を表す印。これが立っている間は、カードが何枚あっても常に「作成中」バッジとして扱われます（[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)参照）。
 - 「公開予定」トグルがONなら、この時点（まだカードを1枚も入力していない段階）で`announceNewDeckToServer`を呼び、サーバーにも空のデッキとして登録します。これにより、作成した瞬間から他の部員の一覧にも「🟠 作成中」として表示されるようになります。
 
-### 5.3 空デッキをサーバーに先行登録：`announceNewDeckToServer(deckId)`（2025〜2079行）
+### 5.3 空デッキをサーバーに先行登録：`announceNewDeckToServer(deckId)`（2559〜2614行）
 ```js
 async function announceNewDeckToServer(deckId) {
   const deck = decks.find(d => d.id === deckId);
@@ -462,6 +463,7 @@ async function announceNewDeckToServer(deckId) {
         guild_id: GUILD_ID,
         session_token: session ? session.session_token : undefined,
         subject: deck.subject || null,
+        description: deck.description || null, // ★ 追加：デッキの説明欄（任意）
         folder_id: deck.folderId || null,
         publisher_id: session ? session.student_id : null,
         publisher_nickname: session ? session.nickname : '匿名',
@@ -497,6 +499,7 @@ async function announceNewDeckToServer(deckId) {
 - 既存の`save_cards`というAPI（カード保存用）を、あえて「中身が空（または少数）の状態」で呼び出すことで、デッキそのものをサーバーに登録します。
 - `silent: true`：この時点ではDiscordへの通知はしません（作成しただけなので、まだ知らせるべき内容が無いため）。
 - `incomplete: true`：「未完成（作成中）」として登録します。
+- `description: deck.description || null`（★ 追加）：デッキの説明欄（任意）を`subject`と同じ扱いで一緒に送ります。作成直後はまだ`deck.description`が設定されていないことが多く、その場合は`null`のまま登録されます（後から`saveRename`で設定・変更できます、[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)参照）。
 - コメントには重要な過去のバグ修正が記録されています：「以前は常に`cards: []`（空配列固定）を送ってしまっていたため、デッキ名編集モーダルで後から『公開予定』をONにしたようなケースで、既にローカルにあったカードが無視されてサーバー側は0枚として登録されてしまっていた。その結果、次に編集画面を開いた際の強制的な最新化で、ローカルのカードがサーバー側の0枚で上書きされて消えてしまう」という重大な不具合があったため、今は必ず「今ローカルにある実際のカード」を送るように修正されています。
 - 送信中に他の同期処理が割り込んでいる可能性があるため、更新前に`decks = loadDecks()`で**もう一度最新の状態を読み直してから**目的のデッキを探して更新する、という慎重な作りになっています。
 - サーバーへの登録が失敗しても（`catch`で握りつぶし）、この端末だけの下書きとして続行できるので、機能自体は壊れません。
@@ -516,6 +519,10 @@ async function openEditDeck(deckId) {
   if (!ok) return; // ユーザーが「やめる」を選んだ場合は編集画面を開かない
 
   document.getElementById('edit-deck-title').textContent = deck.name;
+  // ★ 追加：デッキに説明が設定されていれば #edit-deck-desc に表示する（無ければ隠す）
+  const descBox = document.getElementById('edit-deck-desc');
+  if (deck.description) { descBox.textContent = deck.description; descBox.style.display = ''; }
+  else { descBox.style.display = 'none'; descBox.textContent = ''; }
   document.getElementById('btn-save-local').style.display = '';
   document.getElementById('btn-done').textContent = deck.filename ? '公開して保存' : '保存して公開';
   applyCardFormChoiceMode(deck.choiceMode);
@@ -526,6 +533,7 @@ async function openEditDeck(deckId) {
 - 編集は「サーバー全体を丸ごと上書き保存する」操作につながるため、たとえキャッシュ済みでも**必ず**最新のカードを取り直します（`loadDeckCardsWithRecovery`、2節参照）。
 - その前に`waitForPendingSync(deckId)`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)で説明）で、直前の操作によるサーバーへの送信がまだ終わっていなければそれを待ちます。これをしないと、送信中の変更が完了する前に強制リロードが割り込み、データが消えてしまう危険があります。
 - コメントには「以前は公開済み・作成中のデッキだと『保存』ボタン自体を隠し、常に完全な『公開して保存』（ログイン確認・完成/未完成の選択・Discord通知）を通らないと編集を中断できなかった」という改善の経緯も書かれています。単に作業を保存していったん戻りたいだけのときにも毎回この確認が挟まれるのは不便だったため、「保存」ボタンは常に表示されるよう改善されました。
+- ★ 追加：`deck.description`（デッキの説明欄、任意）が設定されていれば、編集画面の一番上（CSV読み込みブロックより前）に`#edit-deck-desc`として全文表示します。編集はこの画面からではなく、デッキメニューの「デッキ名を変更する」から開く`modal-rename`モーダルで行います（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)参照）。
 
 ```js
 function applyCardFormChoiceMode(choiceMode) {

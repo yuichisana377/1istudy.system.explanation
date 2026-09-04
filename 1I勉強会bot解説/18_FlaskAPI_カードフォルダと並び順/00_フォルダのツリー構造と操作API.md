@@ -18,7 +18,7 @@ def save_card_folders(folders, sha=None):
     local_put(FOLDERS_FILE, folders, sha)
     notify_change()
 ```
-- `folders.json`は`[{id, name, parent_id}, ...]`という**フラットな配列**でフォルダの階層構造を表現します。各フォルダは自分の`parent_id`（親フォルダのID。最上位なら`None`）だけを知っており、木構造そのもの（親から子への逆参照リストなど）は持っていません。木構造の解釈は、これから見る関数群が配列全体を毎回走査することで行います。
+- `folders.json`は`[{id, name, parent_id, description}, ...]`という**フラットな配列**でフォルダの階層構造を表現します。各フォルダは自分の`parent_id`（親フォルダのID。最上位なら`None`）だけを知っており、木構造そのもの（親から子への逆参照リストなど）は持っていません。木構造の解釈は、これから見る関数群が配列全体を毎回走査することで行います。`description`（★ 追加、任意）はユーザーがフォルダの中身をメモできる自由記述欄で、フォルダ自体の階層構造とは無関係な付随情報です。
 - `MAX_FOLDER_DEPTH = 3`… フォルダは最大3階層までしか作れません。
 
 ```python
@@ -31,12 +31,14 @@ def _folders_text(folders):
         parent_id = f.get("parent_id")
         fields = [
             ("フォルダ名", f.get('name')),
+            ("説明", _clip_text(f.get('description')) or "(未設定)"),  # ★ 追加
             ("親フォルダ", by_id.get(parent_id, parent_id) if parent_id else "(なし・最上位)"),
         ]
         lines.extend(_json_block(fields))
     return "\n".join(lines)
 ```
 - `by_id = {f.get("id"): f.get("name") for f in folders}`… IDから名前を引く対応表をその場で作り、「親フォルダ」の表示に、無機質なIDではなく人間が読める名前を使えるようにしています。
+- `description`（★ 追加）… フォルダの説明欄（任意）。値が無ければ`(未設定)`と表示され、[00_カードデータ層と索引管理.md](../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)のデッキ側`description`と同じ考え方です。
 
 ## 2. フォルダ階層のツリー演算（6210〜6243行）
 
@@ -157,13 +159,14 @@ def list_folders():
     return jsonify({"ok": True, "folders": folders})
 ```
 - 単純に`folders.json`の中身をそのまま返します。
+- ★ 追加：`save_folder`は`description`（フォルダの説明欄、任意）も受け取り、新規作成・改名／移動のどちらでも保存します。空文字は`(未設定)`に揃えてから保存し、制御文字チェック（`reject_if_bug_chars`）の対象にもなります。Web側の編集UIは[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](../../1I勉強会web解説/02_Cardmaker/02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)の「フォルダ名の入力」を参照してください。
 
 ```python
 @app.route("/save_folder", methods=["POST"])
 def save_folder():
     """
-    新規作成: { name, parent_id }
-    改名／移動: { id, name, parent_id }
+    新規作成: { name, parent_id, description }
+    改名／移動: { id, name, parent_id, description }
     """
     data      = request.json or {}
     _guild_id, _student_id, nickname, err = require_login_json(data)  # ★ 変更にはログイン必須
@@ -172,11 +175,13 @@ def save_folder():
     folder_id = data.get("id")
     name      = (data.get("name") or "").strip()
     parent_id = data.get("parent_id")
+    # ★ 追加：フォルダの説明欄（任意）。空文字は「未設定」としてNoneに揃える。
+    description = (data.get("description") or "").strip() or None
 
     if not name:
         return jsonify({"ok": False, "error": "name は必須です"})
 
-    err = reject_if_bug_chars({"フォルダ名": name})
+    err = reject_if_bug_chars({"フォルダ名": name, "フォルダの説明": description})
     if err:
         return err
 
@@ -203,11 +208,12 @@ def save_folder():
                     return jsonify({"ok": False, "error": "クイズ過去問フォルダには、みんなでクイズの結果から自動保存されたデッキしか入れられません"})
                 target["parent_id"] = parent_id
             target["name"] = name
+            target["description"] = description
         else:
             if _folder_level(folders, parent_id) >= MAX_FOLDER_DEPTH:
                 return jsonify({"ok": False, "error": f"フォルダは{MAX_FOLDER_DEPTH}階層までしか作成できません"})
             folder_id = generate_folder_id()
-            folders.append({"id": folder_id, "name": name, "parent_id": parent_id})
+            folders.append({"id": folder_id, "name": name, "parent_id": parent_id, "description": description})
 
         save_card_folders(folders, sha)
         change = file_diff(FOLDERS_FILE, old_folders_text, _folders_text(folders))

@@ -26,6 +26,7 @@ def deck_share_info():
         "ok": True,
         "name": data.get("name", entry.get("deck_name")),
         "subject": data.get("subject"),
+        "description": data.get("description"),  # ★ 追加：デッキの説明欄（任意、閲覧専用ビューアにも見せてよい情報）
         "cards": data.get("cards", []),
         "choice_mode": data.get("choice_mode"),
         "incomplete": bool(data.get("incomplete", False)),
@@ -36,6 +37,7 @@ def deck_share_info():
 - このAPIは**ログイン処理を一切呼びません**（`require_login_json`も`require_member_session`も出てきません）。トークンさえ分かれば誰でも呼べる、というのがこの機能の目的そのものだからです（トークンが「合言葉」の役割を果たします）。
 - チェックの順序に注目してください：①`_parse_share_token_guild`でtokenの形式そのものが正しいか（guild_id部分を取り出せるか）→②`deck_shares_{guild_id}.json`の中に一致するエントリがあるか→③取り消し済みでないか→④期限切れでないか→⑤対象のデッキファイルが今も実在するか、の5段階です。存在しない・無効・取り消し済み・期限切れ・デッキ削除済みのどの場合も、理由をそれぞれ違うメッセージで返している点にも注目してください（[../../1I勉強会web解説/12_DeckShare/00_解説.md](../../1I勉強会web解説/12_DeckShare/00_解説.md)で見るDeckShare.htmlは、これをそのままエラー画面に表示します）。
 - レスポンスに含まれるフィールドが**閲覧に必要な最小限**である点も重要です。`get_card_set`（[14_FlaskAPI_CardMaker/01_一覧取得と保存API.md](../14_FlaskAPI_CardMaker/01_一覧取得と保存API.md)）が返す`filename`（内部のファイル名）は含まれていません。これは、共有された側にファイル名という「内部識別子」を渡す必要が無い（渡すと将来的に別のAPIと組み合わせて悪用される余地を増やすだけ）という考え方です。`published_by`（本来の公開者情報）の代わりに`shared_by`（今回のリンクを発行した人のニックネームだけ）を返しているのも同様の理由です。
+- ★ 追加：`description`（デッキの説明欄、任意）はユーザーが自分で書いた自由記述メモであり、内部識別子ではないため、閲覧専用ビューアにもそのまま渡してよい情報として含まれています（[../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)参照）。表示側は[../../1I勉強会web解説/12_DeckShare/00_解説.md](../../1I勉強会web解説/12_DeckShare/00_解説.md)の`renderIntroMeta`を参照してください。
 
 ## 2. `/request_deck_share`：本人以外からの依頼（5193〜5282行）
 

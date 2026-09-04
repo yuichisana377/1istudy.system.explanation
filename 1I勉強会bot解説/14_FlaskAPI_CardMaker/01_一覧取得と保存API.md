@@ -64,7 +64,10 @@ def get_card_set():
     filename = data.get("filename")
     subject  = data.get("subject")
     folder_id = data.get("folder_id")
+    # ★ 追加：デッキの説明欄（任意）。空文字は「未設定」としてNoneに揃える。
+    description = (data.get("description") or "").strip() or None
 ```
+- **`description`（デッキの説明欄、任意）**… ユーザーがデッキの中身を自由記述でメモできる欄です。空文字は`None`（未設定）に揃えてから保存し、[00_カードデータ層と索引管理.md](00_カードデータ層と索引管理.md)の`_deck_meta_text`/`_card_index_entry_lines`にもこの値が「説明」として表示されます。制御文字チェック（`reject_if_bug_chars`）の対象にもなっています。
 - **重要な注意点がコメントに書かれています**：`publisher_id`/`publisher_nickname`は、他の「変更」APIとは違って**あえてクライアントの自己申告のまま信用しています**。
   ```python
   # ★ 注意：publisher_id/publisher_nicknameはあえてクライアント自己申告のまま
@@ -131,6 +134,7 @@ def get_card_set():
         "name": name,
         "cards": cards,
         "subject": subject,
+        "description": description,  # ★ 追加：デッキの説明欄（任意）
         "folder_id": folder_id,
         "published_by": {
             "id": final_publisher_id,

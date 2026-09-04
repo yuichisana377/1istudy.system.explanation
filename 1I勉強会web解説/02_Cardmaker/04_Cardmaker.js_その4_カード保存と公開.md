@@ -125,7 +125,7 @@ showScreen('list');
 
 ---
 
-## 4. 実際にサーバーへ公開する：`publishDeck(deckId, isComplete)`（2271〜2352行）
+## 4. 実際にサーバーへ公開する：`publishDeck(deckId, isComplete)`（2840〜2913行）
 
 ```js
 async function publishDeck(deckId, isComplete = true) {
@@ -148,6 +148,7 @@ async function publishDeck(deckId, isComplete = true) {
     guild_id: GUILD_ID,
     session_token: session ? session.session_token : undefined,
     subject: deck.subject || null,                       // ★ 科目ごとのチャンネル振り分け用
+    description: deck.description || null,               // ★ 追加：デッキの説明欄（任意）
     folder_id: deck.folderId || null,                     // ★ フォルダ所属（みんなで共有）
     publisher_id: session ? session.student_id : null,     // ★ 公開者の学籍番号
     publisher_nickname: session ? session.nickname : '匿名', // ★ 公開者のニックネーム
@@ -159,6 +160,7 @@ async function publishDeck(deckId, isComplete = true) {
   if (deck.filename) body.filename = deck.filename;
 ```
 - `cardToServerPayload`（[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）を使うことで、多肢選択デッキの選択肢情報も欠けずに送られます。コメントによれば、以前はここだけ独自に固定6フィールドへ詰め替えていたため、多肢選択デッキを初めて公開した瞬間に選択肢データが失われてしまうバグがあったそうです。
+- `description`（★ 追加）：デッキの説明欄（任意）。`subject`と同じく、この時点の`deck.description`をそのまま送るだけです（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「デッキ名・説明の変更」参照）。
 - `first_publish`：サーバー側の「`filename`が既に存在するかどうか」だけでは判定できない問題への対応です。「作成中」として先行登録済みのデッキ（`announceNewDeckToServer`で既に`filename`が振られている）が、初めて本当に「公開して保存」されたとき、サーバー側からすると`filename`が既にあるので「更新」と判定されてしまい、通知の文言が「新規公開しました」ではなく「更新されました」という誤った内容になってしまう問題があったそうです。`deck.notYetPublished`（一度も公開フローを経ていないか）を見て、「これが実質的な初回公開かどうか」を明示的にサーバーへ伝えることでこれを解決しています。
 
 ```js

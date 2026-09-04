@@ -209,7 +209,7 @@ function refreshStudyCardDisplay(c) {
 
 ---
 
-## 3. デッキ名の変更（3290〜3375行）
+## 3. デッキ名・説明の変更（3836〜3924行）
 
 ```js
 let renamingDeckId = null;
@@ -220,6 +220,7 @@ async function openRename(id) {
   const currentName = currentSubject && deck.name.startsWith(currentSubject + ' ')
     ? deck.name.slice(currentSubject.length + 1) : deck.name;
   document.getElementById('modal-rename-input').value = currentName;
+  document.getElementById('modal-rename-desc').value = deck.description || ''; // ★ 追加：説明欄も一緒に編集する
   // ★ 追加：まだサーバー未登録（非公開・作成中のローカル下書き）のデッキだけ
   //   「公開予定」トグルを表示する。既にサーバー登録済み（filenameあり）の
   //   デッキは、公開予定を取り消したい場合は既存の「非公開に戻す」メニューを使う。
@@ -251,6 +252,7 @@ async function openRename(id) {
 }
 ```
 - デッキ名から科目名の接頭辞を取り除いて入力欄に表示します（一覧の表示ロジックと同じ考え方）。
+- ★ 追加：デッキの説明欄（`deck.description`、任意）も同じモーダルで編集できます。フォルダの説明欄（[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)参照）と同じ考え方で、一覧のデッキカード・編集画面上部・プレイモード選択シート・共有リンク閲覧画面に表示されます（[14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md](../../1I勉強会bot解説/14_FlaskAPI_CardMaker/00_カードデータ層と索引管理.md)参照）。
 - 「公開予定」トグルは、まだサーバー未登録（下書き）のデッキのときだけ表示します。すでに公開済みのデッキを非公開に戻したい場合は、別の「非公開に戻す」メニューを使う設計です。
 - 科目名（`select`欄）はサーバーの`channels`から取得しますが、失敗した場合は現在の科目名（`currentSubject`）だけを選択肢として表示します。`currentSubject`はデッキ作成者が自由に設定できる文字列なので、`esc()`を通さずに`innerHTML`へ入れると保存型XSSになる、という点にコメントで注意が促されています。
 
@@ -260,6 +262,8 @@ async function saveRename() {
   const input   = document.getElementById('modal-rename-input').value.trim();
   if (!input) return;
   if (await warnIfBugChars(input, 'modal-rename-input')) return;
+  const description = document.getElementById('modal-rename-desc').value.trim(); // ★ 追加
+  if (description && await warnIfBugChars(description, 'modal-rename-desc')) return;
   const deck = decks.find(d => d.id === renamingDeckId);
   const newName = subject ? `${subject} ${input}` : input;
   // ★ 追加：まだサーバー未登録のデッキのみ、公開予定トグルの変更を反映する
@@ -272,6 +276,7 @@ async function saveRename() {
   }
   deck.subject = subject;
   deck.name    = newName;
+  deck.description = description || null; // ★ 追加
   saveDecks(decks);
   closeModal('modal-rename');
   renderDeckListUI();
@@ -310,7 +315,7 @@ async function saveRename() {
 
 ---
 
-## 4. サーバー同期を「順番待ちの列」にする仕組み（3361〜3416行）
+## 4. サーバー同期を「順番待ちの列」にする仕組み（3937〜3982行）
 
 CardMakerのあちこちで登場してきた`queueSyncDeckToServer`と`waitForPendingSync`の正体がここで説明されています。
 
@@ -347,6 +352,7 @@ async function syncDeckToServer(deck) {
         guild_id: GUILD_ID,
         session_token: session ? session.session_token : undefined,
         subject: deck.subject || null,
+        description: deck.description || null, // ★ 追加：デッキの説明欄（任意）
         folder_id: deck.folderId || null, // ★ フォルダ所属（みんなで共有）
         publisher_id: session ? session.student_id : null,
         publisher_nickname: deck.published_by || (session ? session.nickname : '匿名'),
@@ -366,7 +372,7 @@ async function syncDeckToServer(deck) {
   }
 }
 ```
-`syncDeckToServer(deck)`自体（3385〜3416行）は、実際にデッキの内容をサーバーの`save_cards`に送信する処理です。`silent: true`（通知なし）で送られるのがポイントで、カードを1枚編集するたびにDiscordへ通知が飛ぶと煩わしいため、通知が飛ぶのは「公開して保存」（[04_Cardmaker.js_その4_カード保存と公開.md](04_Cardmaker.js_その4_カード保存と公開.md)の`publishDeck`）のときだけに限定されています。
+`syncDeckToServer(deck)`自体（3950〜3982行）は、実際にデッキの内容をサーバーの`save_cards`に送信する処理です。`silent: true`（通知なし）で送られるのがポイントで、カードを1枚編集するたびにDiscordへ通知が飛ぶと煩わしいため、通知が飛ぶのは「公開して保存」（[04_Cardmaker.js_その4_カード保存と公開.md](04_Cardmaker.js_その4_カード保存と公開.md)の`publishDeck`）のときだけに限定されています。
 
 ---
 
@@ -689,7 +695,7 @@ async function openFolderPlayMode(folderId) {
 - フォルダ内の全デッキ（カードが1枚もあるものだけ）を対象に、それぞれの保留中の同期を待ってから、強制的に最新のカードを取り直します。
 - 一部のデッキだけ読み込みに失敗した場合、**失敗したデッキだけを対象に**再試行できるようにしています（`pending`を「まだ失敗しているデッキだけ」に絞り込んでループを繰り返す）。コメントには「1回失敗しただけで行き止まりのアラートを出して終わらせず、タイムアウトを含む一時的な通信エラーでフォルダのプレイを諦めなくて済むように」という意図が書かれています。
 
-このあとは、実際に学習開始モーダル（`modal-play-mode`）の中身（対象問題数、「わからない」件数、「続きから」の有無など）を組み立てて表示します。「みんなでクイズを始める」の項目は、単一デッキが前提の機能なのでフォルダプレイでは非表示にする、という注記もあります。
+このあとは、実際に学習開始モーダル（`modal-play-mode`）の中身（対象問題数、「わからない」件数、「続きから」の有無など）を組み立てて表示します。「みんなでクイズを始める」の項目は、単一デッキが前提の機能なのでフォルダプレイでは非表示にする、という注記もあります。★ 追加：`setIconText`でフォルダ名を表示した直後に`setPlayModeDesc(folder ? folder.description : null)`を呼び、フォルダに説明（任意）が設定されていれば`#play-mode-desc`に表示します（デッキ単体のプレイは[07_Cardmaker.js_その7_学習モードとクイズ再生.md](07_Cardmaker.js_その7_学習モードとクイズ再生.md)の`openPlayMode`を参照）。
 
 ---
 
