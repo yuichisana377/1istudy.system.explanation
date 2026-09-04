@@ -308,16 +308,20 @@ async function deleteMyLog(timeKey, btn) {
 ## 8. みんなの記録（885〜947行）
 
 ```js
-var memberIds = {};
-Object.keys(nicknameMap).forEach(function(id) { memberIds[id] = true; });
-Object.keys(allPoints).forEach(function(id) { memberIds[id] = true; });
-Object.keys(allCompletedTasks).forEach(function(id) { memberIds[id] = true; });
-memberIds[STUDENT.id] = true;
+function allMemberIds() {
+  var memberIds = {};
+  Object.keys(nicknameMap).forEach(function(id) { memberIds[id] = true; });
+  Object.keys(allPoints).forEach(function(id) { memberIds[id] = true; });
+  Object.keys(allCompletedTasks).forEach(function(id) { memberIds[id] = true; });
+  memberIds[STUDENT.id] = true;
+  return Object.keys(memberIds);
+}
 ```
 - 「メンバー別 今週の記録」に表示する対象者を決める処理です。ニックネーム対応表・累計ポイント・達成済み課題という**3つの異なるデータソースそれぞれに登場する学籍番号を、全部まとめて（重複排除して）対象にする**、という組み立て方です。これにより、「今週まだ何も記録していないが、過去にポイントを持っている人」なども一覧に含められます。
+- ★ 追加（2026/09/04）：以前は`renderEveryone`の中に直接書かれていたロジックだったが、9節の課題一覧に「何人中何人が達成しているか」を表示する機能で同じ「全員」の定義が必要になったため、`allMemberIds()`という共通関数に切り出した。呼び出し側（`renderEveryone`・`renderTasks`）はどちらも`allMemberIds()`を呼ぶだけで、二重管理にならない。
 
 ```js
-var members = Object.keys(memberIds).map(function(id) {
+var members = allMemberIds().map(function(id) {
   return { id: id, nickname: nicknameMap[id] || id, min: weekMinMap[id] || 0, pts: weekPtsRaw[id] || 0 };
 }).sort(function(a, b) {
   return (b.min - a.min) || (b.pts - a.pts) || a.nickname.localeCompare(b.nickname, "ja");
@@ -367,6 +371,7 @@ function renderStudyingNow() {
 function renderTasks() {
   var el = document.getElementById("task-list");
   var doneIds = completedTasks.map(function(e) { return e.id; });
+  var totalMembers = allMemberIds().length; // ★ 追加：分母（登録されている全員の人数）
 
   var sorted = TASKS_JSON.slice().sort(function(a, b) {
     var aDone = doneIds.includes(a.id) ? 1 : 0;
@@ -387,6 +392,11 @@ function renderTasks() {
     var noteDot  = t.note ? ('<span class="note-dot" title="備考あり">' + Icons.html('memo', {size:13}) + '</span>') : '';
     var noteHtml = t.note ? '<div class="sl-task-note">' + esc(t.note) + '</div>' : '';
 
+    // ★ 追加：達成者数バッジ（タップで達成者一覧を表示、initTaskListEvents参照）
+    var achieveCount = getTaskAchievers(t.id).length;
+    var achieveBadge = '<span class="sl-achieve-badge" data-task-id="' + escAttr(t.id) + '">' +
+      Icons.html('people', {size:12}) + ' ' + achieveCount + '/' + totalMembers + '人達成</span>';
+
     return '<div class="sl-task-row' + (done ? " done-row" : "") + '">' +
       '<div class="sl-task-body' + (t.note ? " has-note" : "") + '">' +
         '<div class="sl-task-title' + (done ? " done" : "") + '">' + esc(t.title) + '</div>' +
@@ -394,6 +404,7 @@ function renderTasks() {
           '<span class="sl-subject-badge">' + esc(t.subject) + '</span>' +
           '<span class="sl-due">締切: ' + t.due + '</span>' +
           '<span class="sl-pts-badge">' + Icons.html('star', {size:13}) + ' +' + t.points + 'pt</span>' +
+          achieveBadge +
           noteDot +
         '</div>' +
         noteHtml +
@@ -405,8 +416,32 @@ function renderTasks() {
     '</div>';
   }).join("");
 }
+
+// ★ 追加：課題1件を達成しているユーザーのニックネーム一覧（五十音順）を返す。
+//   allCompletedTasks（全ユーザー分の達成済み課題、7節の「達成済み課題（全ユーザー）」参照）
+//   から集計するので、追加の通信は発生しない。
+function getTaskAchievers(taskId) {
+  var names = [];
+  Object.keys(allCompletedTasks).forEach(function(sid) {
+    var hit = (allCompletedTasks[sid] || []).some(function(e) { return e.id === taskId; });
+    if (hit) names.push(nicknameMap[sid] || sid);
+  });
+  return names.sort(function(a, b) { return a.localeCompare(b, "ja"); });
+}
+
+// ★ 追加：達成者バッジをタップしたときに一覧をダイアログで表示する。
+function showTaskAchievers(taskId) {
+  var task  = TASKS_JSON.find(function(t) { return t.id === taskId; });
+  var names = getTaskAchievers(taskId);
+  showAppAlert({
+    title: (task ? task.title : "課題") + "の達成者",
+    desc:  names.length ? names.join("\n") : "まだ誰も達成していません",
+    icon:  Icons.html('people', {size:16}),
+  });
+}
 ```
 - 並び順は「未達成のものを先に、達成済みは後ろに」という大分類のあと、それぞれのグループ内では締切が近い順、という2段階のソートです。
+- ★ 追加（2026/09/04）：「達成者が何分の何、タップすると誰が達成しているのか表示してほしい」という要望を受けて追加。`getTaskAchievers(taskId)`は既に週間ランキング集計（7節）のために取得済みの`allCompletedTasks`（全ユーザー分の達成済み課題）をそのまま使って集計するだけなので、この機能のために新しい通信は一切発生していない。`showTaskAchievers`は`Dialog.js`（[01_StudyLog.js_その1_ログインとアカウント設定.md](01_StudyLog.js_その1_ログインとアカウント設定.md)参照）の`showAppAlert`を流用し、`desc`に改行区切りの名前一覧を渡す（`_appDialogSkeleton`側で`white-space:pre-line`が指定されているため、素直に改行される）。
 
 ```js
 var btnLabel = pending ? '<span class="sl-spinner" style="border-color:rgba(0,0,0,.25);border-top-color:#334155;"></span>送信中…' : (done ? (Icons.html('checkCircle', {size:13}) + " 達成済み") : "達成する");
@@ -427,6 +462,8 @@ function initTaskListEvents() {
   el.addEventListener("click", function(e) {
     var btn = e.target.closest(".sl-task-btn");
     if (btn) { if (btn.disabled) return; toggleTask(btn.dataset.taskId); return; }
+    var achieveBadge = e.target.closest(".sl-achieve-badge");
+    if (achieveBadge) { showTaskAchievers(achieveBadge.dataset.taskId); return; }
     var body = e.target.closest(".sl-task-body.has-note");
     if (body) toggleTaskNote(body);
   });
@@ -437,6 +474,7 @@ function toggleTaskNote(bodyEl) {
   noteEl.classList.toggle("open");
 }
 ```
+- ★ 追加：達成者数バッジ（`.sl-achieve-badge`）のタップ判定を、備考本文（`.has-note`）のタップ判定より**前**に置いてある。バッジは備考のある本文の中にネストされて描画されることがあるため、先にバッジ側で拾って`return`しないと、バッジをタップしたつもりが備考の開閉も一緒に発火してしまう。
 - 課題リストも7節と同じイベント委任パターンです。「達成する」ボタンがクリックされたか、備考付きの本文（`.has-note`）がクリックされたかを`closest`で振り分け、それぞれ`toggleTask`（[03_StudyLog.js_その3_タブ表示・手入力・課題達成.md](03_StudyLog.js_その3_タブ表示・手入力・課題達成.md)で解説）と`toggleTaskNote`（備考の開閉）を呼び分けます。
 
 ---
