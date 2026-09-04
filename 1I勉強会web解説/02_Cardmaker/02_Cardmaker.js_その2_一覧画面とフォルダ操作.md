@@ -96,7 +96,6 @@ if (skeleton) skeleton.style.display = 'none';
 - 通常モードでは、フォルダ名・件数に加えて「▶プレイ」ボタン（フォルダ内を一括で学習）と「メニュー」ボタン（名前変更・移動・削除）を表示します。
 - それぞれのフォルダに`key: 'folder:フォルダID'`という並び順管理用のキーを持たせています。
 - ★ 追加：`f.description`（フォルダの説明欄、任意）が設定されていれば、`.deck-card-desc`として件数の下に1行だけ（`text-overflow: ellipsis`で省略）表示します。`esc()`を通してから`innerHTML`テンプレートに入れているのは、他のユーザー入力（フォルダ名等）と同じXSS対策です。同じ説明は、フォルダを実際に開いているときはパンくずリストの下（`renderBreadcrumb()`、後述）にも全文表示されます。編集はフォルダ名の入力モーダル（5.3節）から行います。
-- **★ 2026/09/04 追記**：`folderUnsureBadge`が件数バッジだけでなく`onclick="event.stopPropagation();showUnsureRatio(${unsureCount}, ${totalCards})"`を持つようになった。一覧では件数（分子）しか出せないため、タップすると`showUnsureRatio()`（新設）が`showCmAlert`で「◯ / ◯ 問」（何問中何問がわからないか）をダイアログ表示する。`event.stopPropagation()`はフォルダ本体の`onclick="openFolder(...)"`へタップが伝播してフォルダが開いてしまわないようにするため。
 
 ### 1.4 デッキのカードを組み立てる（885〜1001行）
 
@@ -242,18 +241,15 @@ if (skeleton) skeleton.style.display = 'none';
 - ★ 追加：`d.description`（デッキの説明欄、任意）が設定されていれば、フォルダカードと同じ`.deck-card-desc`（1行に省略表示）として`.deck-card-meta`の下に表示します。編集はデッキメニューの「デッキ名を変更する」から開く`modal-rename`モーダルで行います（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「デッキ名・説明の変更」参照）。
 - **並び順キー（`orderKey`）**：公開済みデッキは全員が同じ`filename`を持つので、それを共有キー（`deck:ファイル名`）にします。未公開デッキは他人には見えないデータなので、この端末専用のキー（`localdeck:内部ID`）にし、サーバーには送りません。
 - こちらもクイズ用デッキ選択モード中は、通常のボタンの代わりにチェックボックスの見た目に切り替わります。
-- **★ 2026/09/04 追記（プレイ進捗バッジ）**：通常表示（`pickMode`ではない方）の`.deck-card-meta`に、`choiceModeBadge`の直後・`unsureBadge`の直前へ`studyStatusBadge`が1つ追加された。
+- **★ 2026/09/04 追記（プレイ進捗の表示）**：`.deck-card`要素自体（通常表示、`pickMode`ではない方）に、プレイ中/完了を示すクラスが1つ付くようになった。
   ```js
   const studyProgress  = loadStudyProgress(false, d.id);
   const studyCompleted = loadCompletionRecord(false, d.id);
-  const studyStatusBadge = studyProgress
-    ? `<span class="pub-badge study-doing">${Icons.html('dot', {size:13})} プレイ中</span>`
-    : studyCompleted
-      ? `<span class="pub-badge study-done">${Icons.html('dot', {size:13})} 完了</span>`
-      : '';
+  const studyStatusClass = studyProgress ? ' study-doing' : studyCompleted ? ' study-done' : '';
+  // ...
+  <div class="deck-card${studyStatusClass}" data-key="${orderKey}">
   ```
-  `loadStudyProgress`/`loadCompletionRecord`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「続きから／完了記録」参照）を直接見て、続きから再開できる記録があれば青（`pub-badge study-doing`＝「プレイ中」）、無くて完了記録だけあれば緑（`pub-badge study-done`＝「完了」）を表示する（両方ある場合は「今まさに再開できる」プレイ中を優先）。ホーム画面の「プレイ中のデッキ」「プレイ済み（完了）」欄（4節）は直近1週間のものしか出さないが、こちらは一覧の各デッキに常時つくバッジなので期間で消さず、記録が残っている限りずっと表示され続ける。
-- **★ 2026/09/04 追記（わからないバッジのタップ）**：`unsureBadge`のスパンに`onclick="event.stopPropagation();showUnsureRatio(${unsureCount}, ${questionCount})"`が付き、タップすると「◯ / ◯ 問」（何問中何問がわからないか）が`showCmAlert`のダイアログで表示されるようになった（フォルダ側の`folderUnsureBadge`と同じ`showUnsureRatio()`を使う。1.3節の追記も参照）。
+  `loadStudyProgress`/`loadCompletionRecord`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「続きから／完了記録」参照）を直接見て、続きから再開できる記録があれば`study-doing`、無くて完了記録だけあれば`study-done`を付与する（両方ある場合は「今まさに再開できる」プレイ中を優先）。バッジではなく、ホーム画面の「プレイ中のデッキ」カード（4節）と同じ見た目（カード左端の色付きライン、`border-left`。CSSは`Cardmaker.css`の`.deck-card.study-doing`＝青／`.deck-card.study-done`＝緑）で示す。ホームの「プレイ中のデッキ」「プレイ済み（完了）」欄は直近1週間のものしか出さないが、こちらは一覧の各デッキに常時つく表示なので期間で消さず、記録が残っている限りずっと表示され続ける。
 
 ### 1.5 並び順の適用と、重複描画の最終防御（1003〜1020行）
 ```js

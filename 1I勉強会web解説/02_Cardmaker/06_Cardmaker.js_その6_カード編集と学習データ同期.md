@@ -611,12 +611,19 @@ async function loadUnderstandingBadge() {
     const pct = Math.round((data.understood / data.studied) * 100);
     badge.innerHTML = `${Icons.cmHtml('globe', {size:13})} わかる率 ${pct}%`;
     badge.title = `学習済みカードのうち「わからない」が付いていない割合（みんなの合計 ${data.understood}/${data.studied}）`;
+    // ★ 2026/09/04 追記：タップすると同じ内訳をダイアログで表示する
+    //   （titleのホバー表示はスマホでは見られないため）
+    badge.onclick = () => showCmAlert({
+      title: 'みんなのわかる率',
+      desc: `学習済みカードのうち「わからない」が付いていないものの割合です。\n\n${data.understood} / ${data.studied}`,
+    });
     badge.style.display = '';
   } catch (e) {} // 通信失敗時は出さないだけ（学習自体は止めない）
 }
 ```
 - 学習画面右上に表示される「わかる率」バッジです。「その公開デッキを学習した全員分の、学習済みカードのうち今『わからない』マークが付いていない割合」をサーバーに計算してもらい、パーセント表示します。フォルダをまとめて学習している場合は、フォルダ内の公開デッキ全部を対象にまとめて集計します。
 - `if (!data.ok || !data.studied) return;`：まだ誰も（自分も含めて）1枚も学習していない場合、`0%`という誤解を招く表示を避けるため、バッジ自体を出しません。
+- **★ 2026/09/04 追記**：パーセントだけでは「何人分の何人」なのかが分からないという指摘を受け、`badge.onclick`でタップ時に`showCmAlert`（[03_Cardmaker.js_その3](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)参照）のダイアログを開き、`title`と同じ内訳（`understood / studied`）を表示するようにした。`title`属性（マウスホバー時のツールチップ）はスマートフォンでは見る手段が無いため、タップでも同じ情報を確認できるようにする狙い。CSS側（`Cardmaker.css`の`.study-understand-badge`）にも`cursor: pointer`を追加してある。
 
 ---
 
