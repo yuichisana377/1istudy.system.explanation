@@ -245,11 +245,18 @@ if (skeleton) skeleton.style.display = 'none';
   ```js
   const studyProgress  = loadStudyProgress(false, d.id);
   const studyCompleted = loadCompletionRecord(false, d.id);
-  const studyStatusClass = studyProgress ? ' study-doing' : studyCompleted ? ' study-done' : '';
+  const studyStatusClass = studyProgress ? ' deck-status-doing' : studyCompleted ? ' deck-status-done' : '';
   // ...
   <div class="deck-card${studyStatusClass}" data-key="${orderKey}">
   ```
-  `loadStudyProgress`/`loadCompletionRecord`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「続きから／完了記録」参照）を直接見て、続きから再開できる記録があれば`study-doing`、無くて完了記録だけあれば`study-done`を付与する（両方ある場合は「今まさに再開できる」プレイ中を優先）。バッジではなく、ホーム画面の「プレイ中のデッキ」カード（4節）と同じ見た目（カード左端の色付きライン、`border-left`。CSSは`Cardmaker.css`の`.deck-card.study-doing`＝青／`.deck-card.study-done`＝緑）で示す。ホームの「プレイ中のデッキ」「プレイ済み（完了）」欄は直近1週間のものしか出さないが、こちらは一覧の各デッキに常時つく表示なので期間で消さず、記録が残っている限りずっと表示され続ける。
+  `loadStudyProgress`/`loadCompletionRecord`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「続きから／完了記録」参照）を直接見て、続きから再開できる記録があれば`deck-status-doing`、無くて完了記録だけあれば`deck-status-done`を付与する（両方ある場合は「今まさに再開できる」プレイ中を優先）。バッジではなく、ホーム画面の「プレイ中のデッキ」カード（4節）と同じ見た目（カード左端の色付きライン、`border-left`。CSSは`Cardmaker.css`の`.deck-card.deck-status-doing`＝青／`.deck-card.deck-status-done`＝緑）で示す。ホームの「プレイ中のデッキ」「プレイ済み（完了）」欄は直近1週間のものしか出さないが、こちらは一覧の各デッキに常時つく表示なので期間で消さず、記録が残っている限りずっと表示され続ける。
+  > **★ 同日追記（バグ修正）**：初版ではクラス名を`study-doing`/`study-done`にしていたが、
+  > `study-done`は学習画面の完走演出（`screen-study`内の`.study-done`＝
+  > `flex-direction:column; align-items:center; text-align:center`の中央寄せ大きめ表示。
+  > [07_Cardmaker.js_その7_学習モードとクイズ再生.md](07_Cardmaker.js_その7_学習モードとクイズ再生.md)参照）で既に使われていたクラス名と衝突しており、完了済みデッキのカードがその見た目
+  > （デッキ名が中央寄せの特大表示になり、ボタンも下に大きく間延びする）に化けてしまう
+  > 不具合があった（ユーザーからのスクリーンショット報告で発覚）。他の既存クラスと絶対に
+  > 衝突しない専用名`deck-status-doing`/`deck-status-done`に変更して解消した。
 
 ### 1.5 並び順の適用と、重複描画の最終防御（1003〜1020行）
 ```js
