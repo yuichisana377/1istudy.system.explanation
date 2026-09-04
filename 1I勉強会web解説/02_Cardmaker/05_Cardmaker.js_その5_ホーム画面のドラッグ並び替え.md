@@ -191,9 +191,25 @@ cmDragJustEndedAt = Date.now();
 
 iOSのホーム画面でアプリのアイコンを別のアプリの上に重ねるとフォルダが作られる、あの操作感を再現した機能です。
 
+> **★ 2026/09/04 追記**：以前はここで「掴んでいるのがフォルダ」の場合も
+> `canMoveFolderTo`で判定した上でフォルダの中へ入れる（＝ドラッグでフォルダを
+> フォルダへネストする）ことができたが、この機能はフォルダを開き直しながら
+> ドラッグを継続するための非同期処理（次節`autoOpenFolderDuringDrag`）が絡み合い
+> 不具合の温床になりやすかったため無効化された。今は関数の先頭で
+> `dragEl.dataset.key.startsWith('folder:')`なら即座に`clearHoverFolder()`して
+> 抜けるようになっており、**フォルダをドラッグしてもフォルダの中へは一切入らない
+> （サーバーへも送信されない）**。フォルダの移動は引き続きフォルダメニューの
+> 「移動」（`openMovePicker('folder', ...)`、`canMoveFolderTo`で階層チェック済み）
+> から行う。デッキをフォルダへドラッグして入れる機能はそのまま残っている
+> （以下のコードもデッキ側の分岐だけが実際に動く経路として残った）。
+
 ```js
 function checkHoverFolder(clientX, clientY) {
   if (!dragEl || hoverOpenInProgress) return;
+
+  // ★ フォルダをドラッグしている間はここで打ち切り、以下のフォルダへの
+  //   自動移動判定を一切行わない（上記2026/09/04追記を参照）。
+  if (dragEl.dataset.key.startsWith('folder:')) { clearHoverFolder(); return; }
 
   // ① まず「パンくず付近まで持ち上げたら親フォルダへ戻る」ゾーンを判定する
   //   （フォルダの中にいる時だけ。ルート表示中は戻り先が無いので対象外）
@@ -201,14 +217,8 @@ function checkHoverFolder(clientX, clientY) {
   if (exitZone && clientY <= exitZone.bottom) {
     const parentFolder = folders.find(f => f.id === currentFolderId);
     const parentId = parentFolder ? (parentFolder.parentId ?? null) : null;
-    const dragKey = dragEl.dataset.key;
-    let ok = true;
-    if (dragKey.startsWith('folder:')) {
-      ok = canMoveFolderTo(dragKey.slice('folder:'.length), parentId);
-    } else {
-      const deckId = resolveDeckIdFromDragKey(dragKey);
-      ok = deckId ? canMoveDeckTo(deckId, parentId) : true;
-    }
+    const deckId = resolveDeckIdFromDragKey(dragEl.dataset.key);
+    const ok = deckId ? canMoveDeckTo(deckId, parentId) : true;
     if (ok) {
       applyHoverTarget(exitZone.el, parentId);
       return;
@@ -227,16 +237,8 @@ function checkHoverFolder(clientX, clientY) {
 
   if (folderCard && folderCard.parentElement === grid && folderCard !== dragEl) {
     const fid = folderCard.dataset.key.slice('folder:'.length);
-    const dragKey = dragEl.dataset.key;
-    // 掴んでいるのがフォルダで、その移動先が自分自身／自分の子孫フォルダの場合は
-    // 開けない（無限ループ・不正な階層構造の防止。canMoveFolderToで判定）
-    if (dragKey.startsWith('folder:')) {
-      const draggedFolderId = dragKey.slice('folder:'.length);
-      if (canMoveFolderTo(draggedFolderId, fid)) targetFolderId = fid;
-    } else {
-      const deckId = resolveDeckIdFromDragKey(dragKey);
-      if (!deckId || canMoveDeckTo(deckId, fid)) targetFolderId = fid;
-    }
+    const deckId = resolveDeckIdFromDragKey(dragEl.dataset.key);
+    if (!deckId || canMoveDeckTo(deckId, fid)) targetFolderId = fid;
   }
 
   if (targetFolderId) {
@@ -247,8 +249,8 @@ function checkHoverFolder(clientX, clientY) {
 }
 ```
 - `document.elementFromPoint(x, y)`で「指の真下に今何が表示されているか」を調べます。ただし、そのままだと掴んでいるカード自身（指のすぐ下にあるので）が拾われてしまうため、判定する一瞬だけ`pointerEvents = 'none'`（このカードはクリック・タップの対象外、と一時的に無効化する）にして、その裏にある本当のフォルダを検出できるようにしています。
-- 見つかったフォルダが、今掴んでいる項目の移動先として許可されているか（`canMoveFolderTo`/`canMoveDeckTo`、[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）も確認します。
-- 「パンくず付近まで持ち上げたら親フォルダに戻れる」という逆方向の操作（`getExitZoneRect`）も同じ仕組みで実現しています。フォルダを「開く」動きも「出る（親に戻る）」動きも、結局は「今のフォルダから、目的のフォルダIDへ移動する」という同じ処理（次節の`autoOpenFolderDuringDrag`）で扱えるためです。
+- 見つかったフォルダが、今掴んでいる項目（デッキのみ。上記の通りフォルダは対象外）の移動先として許可されているか（`canMoveDeckTo`、[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）も確認します。
+- 「パンくず付近まで持ち上げたら親フォルダに戻れる」という逆方向の操作（`getExitZoneRect`）も同じ仕組みで実現しています。フォルダを「開く」動きも「出る（親に戻る）」動きも、結局は「今のフォルダから、目的のフォルダIDへ移動する」という同じ処理（次節の`autoOpenFolderDuringDrag`）で扱えるためです（ただしフォルダ自体はもうこの経路を通らない）。
 
 ```js
 function applyHoverTarget(el, targetFolderId) {
@@ -267,6 +269,14 @@ function applyHoverTarget(el, targetFolderId) {
 ## 5. 掴んだままフォルダに入る：`autoOpenFolderDuringDrag(targetFolderId)`（2672〜2763行）
 
 これが、この機能の中で最も複雑な処理です。「掴んでいる項目を実際にそのフォルダの中へ移動させ、かつ、そのフォルダを開いた状態にして、しかもドラッグ自体は途切れさせない」という3つを同時にやろうとしています。
+
+> **★ 2026/09/04 追記**：前節の通り、`checkHoverFolder`はフォルダをドラッグ
+> している間はこの関数を一切呼ばなくなったため、以下の`key.startsWith('folder:')`
+> 分岐は**フォルダに対しては実質到達しない**（呼び出し元は`applyHoverTarget`の
+> タイマー1箇所のみで、そこに渡る`targetFolderId`は今はデッキをドラッグして
+> いるときにしか発生しない）。複雑さ・不具合の温床になっていたのはまさにこの
+> 「フォルダを開き直しながらドラッグを継続する」処理の絡み合いだったため、
+> あえて分岐自体は削除せず、呼び出し側で経路を断つ形で無効化してある。
 
 1. **データを実際に移動する**：フォルダなら`parentId`を、デッキなら`folderId`を書き換え、それぞれサーバーにも反映します（デッキの場合は`loadDeckCardsWithRecovery`で最新カードを取ってから移動、フォルダなら`楽観的にローカルへ反映してから`サーバーに送る、という違いがあります）。
 2. **今のフォルダを切り替える**：`currentFolderId = targetFolderId`とし、`renderDeckListUI()`で画面を作り直します。ただし通常は`cmListDragActive`のガードで再描画がスキップされるため、ここだけ**一時的にガードを外して**（`cmListDragActive = false`にしてから呼び、終わったら元に戻す）強制的に再描画させています。

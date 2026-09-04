@@ -102,11 +102,13 @@ def respond_delete_request():
     target_name, _lines = _delete_target_summary(category, filename)
 
     if action == "reject":
-        log_event(
-            "card" if category == "deck" else "notice",
-            f"「{target_name}」の削除依頼を{owner_nickname}さんが却下しました。",
-            actor=owner_nickname,
-        )
+        # ★ 2026/09/04〜：デッキの削除依頼は運用ログに出さない（お知らせは従来通り記録する）
+        if category != "deck":
+            log_event(
+                "notice",
+                f"「{target_name}」の削除依頼を{owner_nickname}さんが却下しました。",
+                actor=owner_nickname,
+            )
         result = jsonify({"ok": True, "action": "reject"})
     else:
         note = f"（{requester_nickname}さんの削除依頼を{owner_nickname}さんが承認）"
@@ -116,8 +118,8 @@ def respond_delete_request():
             result = _delete_notice_file(filename, owner_nickname, approval_note=note)
 ```
 - `action`によって処理が分かれます。
-  - `"reject"`（拒否）… 実際のファイルは何も変更せず、運用ログに「却下しました」という記録だけを残します。
-  - `"approve"`（承認）… ここで初めて、後の章で見る実際の削除関数（`_delete_card_deck_file`/`_delete_notice_file`）が呼ばれ、本当にファイルが削除されます。`approval_note`という引数を渡している点に注目してください。これにより、削除関数側の運用ログには「〇〇さんの削除依頼を△△さんが承認」という、**なぜ・誰の判断でこの削除が行われたのか**という文脈まで一緒に記録されます。単に「削除されました」だけでなく、承認フローを経た削除であることが後から追跡できるようになっています。
+  - `"reject"`（拒否）… 実際のファイルは何も変更せず、対象がお知らせなら運用ログに「却下しました」という記録を残します（★ 2026/09/04〜：デッキの場合は「デッキの依頼関係は運用ログに表示しなくて良い」というユーザーの指定により、この記録自体を残さなくなった）。
+  - `"approve"`（承認）… ここで初めて、後の章で見る実際の削除関数（`_delete_card_deck_file`/`_delete_notice_file`）が呼ばれ、本当にファイルが削除されます。`approval_note`という引数を渡している点に注目してください。これにより、削除関数側の運用ログには「〇〇さんの削除依頼を△△さんが承認」という、**なぜ・誰の判断でこの削除が行われたのか**という文脈まで一緒に記録されます。単に「削除されました」だけでなく、承認フローを経た削除であることが後から追跡できるようになっています（この削除そのものの記録は「依頼」の記録ではなく通常のデッキ／お知らせ削除の記録なので、上記の変更後も対象外にはしていない）。
 
 ```python
     if guild_id:

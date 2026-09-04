@@ -94,6 +94,7 @@ def request_deck_share():
         notified_via = "web_pending"
 ```
 - ステートレストークンを発行してDMを送り、失敗したら`pending_share_requests_{guild_id}.json`に控えを残す、という二段構えは[12_FlaskAPI_削除依頼システム](../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md)の`/request_delete`と全く同じパターンです（`except Exception`で理由を問わず全ての送信失敗を同じフォールバックに乗せる方針も含めて）。この控えは`/pending_share_requests`（次項）で拾われ、`PendingShareCheck.js`（[../../1I勉強会web解説/12_DeckShare/00_解説.md](../../1I勉強会web解説/12_DeckShare/00_解説.md)参照。`PendingDeleteCheck.js`と同じ構造の共通スクリプト）が次回サイトを開いたときに確認モーダルを出します。
+- **★ 2026/09/04 追記**：以前はこの関数の最後（`return jsonify(...)`の直前）で`log_event`を呼び、この依頼自体を運用ログにも記録していたが、「デッキの依頼関係は運用ログに表示しなくて良い」というユーザーの指定を受けて削除した。共有リンク発行の依頼が飛んだこと自体は、もう運用ログには一切出ない（承認後の`respond_deck_share_request`側のログ削除については後述）。
 
 ## 3. `/pending_share_requests`（5284〜5314行）
 
@@ -154,12 +155,16 @@ def respond_deck_share_request():
             "granted_at": now, "expires_at": now + SHARE_GRANT_TTL_SEC, "used_at": None,
         })
         save_share_grants(guild_id, items, sha)
-        log_event(...)
         result_message = "承認しました。依頼者が共有リンクを発行できるようになりました。"
     else:
-        log_event(...)
         result_message = "却下しました。依頼者にはその旨が伝わります。"
 ```
+> **★ 2026/09/04 追記**：以前はここで承認/却下それぞれ`log_event(...)`を呼び、
+> 運用ログにも記録していたが、「デッキの依頼関係は運用ログに表示しなくて良い」
+> というユーザーの指定を受けて削除した。共有リンクの発行依頼が承認/却下された
+> こと自体は、もう運用ログには一切出ない（グラントの付与・実際のリンク発行は
+> 引き続き上の処理・[00_共有リンクの発行と取り消し.md](00_共有リンクの発行と取り消し.md)の
+> `create_deck_share`側でファイルへ保存されるが、そちらのログ呼び出しは維持されている）。
 - **ここが削除確認依頼との一番大きな違いです**。`/respond_delete_request`は承認と同時に実際の削除処理（`_delete_card_deck_file`）を実行しますが、`respond_deck_share_request`は承認しても**共有リンクそのものは作りません**。代わりに`deck_share_grants_{guild_id}.json`へ「このデッキ・この依頼者に対する、未使用・14日以内有効なグラント」を1件追加するだけです。実際にリンクが発行されるのは、依頼者が改めてCardMakerで「共有リンクを作る」を押し、[00_共有リンクの発行と取り消し.md](00_共有リンクの発行と取り消し.md)で見た`/create_deck_share`が`_find_usable_grant`でこのグラントを見つけたときです。
 - なぜこの1段階を挟むのか（コメントより）：承認から発行までの間に**Discord DMという「失敗しうる経路」を挟みたくなかった**ためです。もし承認と同時にリンクを発行して、それをDMで依頼者に届ける設計にしていたら、そのDMが届かなかった場合（依頼者がDiscord未連携等）に「リンクは存在するのに、誰も知らない」という状態になってしまいます。グラント方式なら、DMが失敗しても依頼者はいつでも自分でCardMakerのボタンを押し直すだけで発行できるため、詰まる経路がありません。
 
