@@ -584,10 +584,11 @@ function markCardSeen(deckId, card) {
 ## 8. みんなの「わかる率」バッジ（3577〜3606行）
 
 ```js
+let studyCardUnderstanding = null;
+
 async function loadUnderstandingBadge() {
-  const badge = document.getElementById('study-understand-badge');
-  if (!badge) return;
-  badge.style.display = 'none';
+  studyCardUnderstanding = null;
+  updateUnderstandingBadgeForCurrentCard();
   const session = getLoginSession();
   if (!session || !session.session_token) return;
   const targetDecks = studyIsFolder
@@ -606,24 +607,45 @@ async function loadUnderstandingBadge() {
     });
     clearTimeout(timer);
     const data = await res.json();
-    // ★ まだ誰も（自分も含め）1枚も学習していなければ、0%という誤解を招く表示はしない
-    if (!data.ok || !data.studied) return;
-    const pct = Math.round((data.understood / data.studied) * 100);
-    badge.innerHTML = `${Icons.cmHtml('globe', {size:13})} わかる率 ${pct}%`;
-    badge.title = `学習済みカードのうち「わからない」が付いていない割合（みんなの合計 ${data.understood}/${data.studied}）`;
-    // ★ 2026/09/04 追記：タップすると同じ内訳をダイアログで表示する
-    //   （titleのホバー表示はスマホでは見られないため）
-    badge.onclick = () => showCmAlert({
-      title: 'みんなのわかる率',
-      desc: `学習済みカードのうち「わからない」が付いていないものの割合です。\n\n${data.understood} / ${data.studied}`,
-    });
-    badge.style.display = '';
+    if (!data.ok) return;
+    studyCardUnderstanding = data.cards || {};
+    updateUnderstandingBadgeForCurrentCard();
   } catch (e) {} // 通信失敗時は出さないだけ（学習自体は止めない）
 }
+
+function studyCardDeckFilename(card) {
+  const deckId = studyIsFolder ? card.__deckId : studyDeckId;
+  const deck = decks.find(d => d.id === deckId);
+  return deck ? deck.filename : null;
+}
+
+function updateUnderstandingBadgeForCurrentCard() {
+  const badge = document.getElementById('study-understand-badge');
+  if (!badge) return;
+  badge.style.display = 'none';
+  badge.onclick = null;
+  if (!studyCardUnderstanding) return;
+  const c = studyCards[studyIdx];
+  if (!c) return;
+  const filename = studyCardDeckFilename(c);
+  if (!filename) return;
+  const stat = studyCardUnderstanding[`${filename}:${cardKey(c)}`];
+  if (!stat) return;
+  const [understood, studied] = stat;
+  const pct = Math.round((understood / studied) * 100);
+  badge.innerHTML = `${Icons.cmHtml('globe', {size:13})} わかる率 ${pct}%`;
+  badge.title = `このカードを学習した人のうち「わからない」が付いていない人数（${understood}/${studied}人）`;
+  badge.onclick = () => showCmAlert({
+    title: 'このカードのわかる率',
+    desc: `このカードを学習した人のうち、今「わからない」が付いていない人数です。\n\n${understood} / ${studied} 人`,
+  });
+  badge.style.display = '';
+}
 ```
-- 学習画面右上に表示される「わかる率」バッジです。「その公開デッキを学習した全員分の、学習済みカードのうち今『わからない』マークが付いていない割合」をサーバーに計算してもらい、パーセント表示します。フォルダをまとめて学習している場合は、フォルダ内の公開デッキ全部を対象にまとめて集計します。
-- `if (!data.ok || !data.studied) return;`：まだ誰も（自分も含めて）1枚も学習していない場合、`0%`という誤解を招く表示を避けるため、バッジ自体を出しません。
-- **★ 2026/09/04 追記**：パーセントだけでは「何人分の何人」なのかが分からないという指摘を受け、`badge.onclick`でタップ時に`showCmAlert`（[03_Cardmaker.js_その3](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)参照）のダイアログを開き、`title`と同じ内訳（`understood / studied`）を表示するようにした。`title`属性（マウスホバー時のツールチップ）はスマートフォンでは見る手段が無いため、タップでも同じ情報を確認できるようにする狙い。CSS側（`Cardmaker.css`の`.study-understand-badge`）にも`cursor: pointer`を追加してある。
+- 学習画面右上に表示される「わかる率」バッジです。取得したデータ（`studyCardUnderstanding`、カードごとの`[わかる人数, 学習した人数]`の辞書）をキャッシュしておき、実際の表示更新は`updateUnderstandingBadgeForCurrentCard()`が担当します。フォルダをまとめて学習している場合は、フォルダ内の公開デッキ全部を対象にまとめて取得します。
+- `studyCardDeckFilename(card)`：カードが所属するデッキの`filename`を引く小さなヘルパーです。フォルダ学習中はカード自身が持つ`__deckId`から、単一デッキ学習中は`studyDeckId`から、それぞれ`decks`配列を引いて求めます。サーバー側の`{filename}:{カードキー}`という複合キー（[19_FlaskAPI_学習進捗データ](../../1I勉強会bot解説/19_FlaskAPI_学習進捗データ/00_わからないマークと進捗の端末間共有.md)参照）と突き合わせるために使います。
+- `updateUnderstandingBadgeForCurrentCard()`は`loadUnderstandingBadge()`の取得完了時と、`renderStudyCard()`でカードが切り替わるたび（[07_Cardmaker.js_その7](07_Cardmaker.js_その7_学習モードとクイズ再生.md)参照）に呼ばれ、**今表示しているカード1枚だけ**の「わかる率」に更新します。対応する`stat`が無ければ（まだ誰もこのカードを学習していなければ）バッジ自体を隠します（`if (!stat) return;`）。デッキの完走演出（`study-done`画面）では「今のカード」が存在しないため、`renderStudyCard()`側で明示的にこの関数を呼び、バッジを隠しています。
+- **★ 2026/09/04 追記（経緯）**：初版は「デッキ全体で合算した1つの割合」を表示していたが、①タップ時の内訳もパーセントも分かりにくい、という指摘で`badge.onclick`によるタップ表示を追加。②さらにその内訳の数字（例：`31`）が、実際の生徒数よりずっと大きく見えるとの指摘を受けて調査したところ、原因は「デッキ内の複数カード分を合算していたため」（1人が7問学習しただけで+7、という延べ数だった）と判明。ユーザーから「そのデッキではなく、カードをプレイした人数のうちにしてほしい。今現在何人プレイしたことがあって、何人がわかってるのかが知りたい」との要望を受け、**バッジ自体をデッキ全体の集計からカード単位の表示に作り直した**（サーバー側もカードごとの内訳を返すよう変更。19章参照）。カードを1枚だけ見れば、その`[わかる人数, 学習した人数]`はどちらも実際の生徒数を超えることがない、直感的な数字になる。
 
 ---
 
