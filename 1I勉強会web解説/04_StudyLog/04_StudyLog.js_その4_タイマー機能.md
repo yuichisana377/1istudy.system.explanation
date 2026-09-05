@@ -335,6 +335,10 @@ async function timerStop() {
   }
   startSyncPolling(); // ★ 確認画面を見ている間も、他端末での保存/破棄を検知できるようにする
 
+  // ★ 2026/09/05 追記：CardMakerでのプレイ開始がこのタイマーを自動的に
+  //   始めていた場合、そのメモを引き継ぐ（後述consumePendingTimerMemo）。
+  var pendingMemo = consumePendingTimerMemo();
+
   var mins = Math.floor(timerSec / 60);
   if (mins < 1) {
     await showAppAlert({ title: "1分未満のため記録できません" });
@@ -345,10 +349,41 @@ async function timerStop() {
   document.getElementById("timer-confirm").style.display = "block";
   document.getElementById("conf-time").textContent       = mins + "分 " + pad(timerSec % 60) + "秒";
   document.getElementById("conf-time").dataset.min       = mins;
+  if (pendingMemo) document.getElementById("conf-memo").value = pendingMemo;
 }
 ```
 - コメントに重要な設計判断が書かれています：「ここではまだ保存/破棄が決まっていないため、サーバー側の記録はすぐに消さず『一時停止』扱いで経過時間だけ確定させておく。これにより他の端末には『一時停止しました』と正しく伝わり、計測中の表示が理由もなく途中でリセットされるのを防げる。実際にサーバー側の記録を消すのは、保存または破棄が確定した時」。「ストップ」ボタンを押した直後は、確認画面（保存するか、破棄するか、まだ迷える状態）に過ぎないため、サーバー側のデータもまだ完全には消さず、あくまで「一時停止」という中間状態にとどめています。
 - 1分未満の計測は、記録として残す価値が無いと判断され、その場で自動的に破棄されます。
+
+### 7.4 ★ 2026/09/05 追記：CardMakerからの自動計測開始とメモの引き継ぎ
+
+「CardMakerをプレイした場合、勉強ログのタイマーが起動していなければ自動で計測。メモ欄には、CardMaker「〇〇」をプレイ　にする」という要望を受けて追加した連携。CardMakerとStudyLogは別ページ（`Cardmaker.html`/`StudyLog.html`）だが、同一オリジンなので`localStorage`を共有できることを利用している。
+
+**CardMaker側**（`Cardmaker.js`の`maybeAutoStartStudyTimer(memo)`、`startStudyMode()`が学習画面を開くたびに呼ぶ）：
+1. `GET /timer_state`でタイマーの現在状態を確認する。
+2. `"idle"`（誰も計測していない）のときだけ`POST /timer_start`でこの本人の計測を開始する。既に`"running"`／`"paused"`（本人が既に何かを計測中）なら何もしない＝横取りしない。
+3. 開始できたら、`localStorage`のキー`"cm_pending_timer_memo"`に`{ memo: "CardMaker「◯◯」をプレイ", ts: Date.now() }`を保存しておく（◯◯はプレイ中のデッキ名／フォルダ名＝`studyBaseTitle`）。
+4. 全体を`try/catch`で囲み、ログインしていない・通信に失敗した場合は何もしない（プレイ自体は絶対に止めないベストエフォート）。
+
+**StudyLog側**（`consumePendingTimerMemo()`、新設）：
+```js
+function consumePendingTimerMemo() {
+  var KEY = "cm_pending_timer_memo";
+  try {
+    var raw = localStorage.getItem(KEY);
+    if (!raw) return null;
+    localStorage.removeItem(KEY);
+    var data = JSON.parse(raw);
+    if (!data || !data.memo || !data.ts) return null;
+    var ONE_DAY_MS = 24 * 60 * 60 * 1000;
+    if (Date.now() - data.ts > ONE_DAY_MS) return null;
+    return data.memo;
+  } catch (e) { return null; }
+}
+```
+- `timerStop()`（確認画面を出す直前）で必ず1回呼ぶ。保存に至るか（`mins >= 1`）1分未満で自動破棄されるかに関わらず、**停止のたびに必ず消費**する（`localStorage.removeItem`を先に呼んでから中身を見ている点に注目）。これにより、次に始まる無関係なタイマー（例：後日、本人がCardMakerを経由せず手動で開始したもの）に古いメモが紛れ込むことを防ぐ。
+- `ts`（開始時刻）が1日以上前なら`null`を返して無視する。CardMaker側で開始だけして何日も停止せずに放置していたような場合、久しぶりに停止したときに古い（もう文脈を忘れているであろう）メモが誤って復元されるのを避けるための保険。
+- 戻り値がある場合だけ`timerStop()`が`conf-memo`欄に代入する。無ければ何もしない＝従来通り空欄のまま（手動で開始した通常のタイマーの見た目は一切変わらない）。
 
 ---
 

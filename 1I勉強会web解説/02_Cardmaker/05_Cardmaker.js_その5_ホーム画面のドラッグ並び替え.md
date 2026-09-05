@@ -259,6 +259,18 @@ function checkHoverFolder(clientX, clientY) {
 > 無事だったため、この2つの経路で挙動が食い違っていた形。次節のコードにこの
 > 2フィールドを追加して修正した。
 
+> **★ 2026/09/05 追記（受け皿の変更）**：`getExitZoneRect()`が参照する対象が
+> パンくずリスト（`#folder-breadcrumb`、±16pxの余白）から、専用の受け皿バー
+> （`#folder-exit-dropzone`、`Cardmaker.html`に新設）へ変わった。この受け皿は
+> `.topbar`の直下・`.cm-scroll-body`の外に置かれた「ドラッグ中かつフォルダの
+> 中にいる間だけ表示される」大きめのバーで、`beginDrag()`/`autoOpenFolderDuringDrag()`
+> （フォルダの出入りで`currentFolderId`が変わるたび）/`endDrag()`から呼ばれる
+> `updateFolderExitDropzoneVisibility()`が表示・非表示を管理する。パンくず（狭く、
+> スクロールで見えなくなることもある）に正確に指を重ねる必要があったのを、
+> 画面上部いっぱいの当てやすいスペースに変えたことで、「フォルダから出す」操作の
+> 成功率を上げる狙い。`getExitZoneRect()`の戻り値の形（`{top, bottom, el}`）自体は
+> 変わっていないので、`checkHoverFolder`側の呼び出し方には変更が無い。
+
 ```js
 function applyHoverTarget(el, targetFolderId) {
   if (hoverFolderEl === el) return;
@@ -270,6 +282,19 @@ function applyHoverTarget(el, targetFolderId) {
 }
 ```
 - 同じフォルダの上に留まり続けている間だけ青い枠線でハイライトし、0.65秒（`HOVER_OPEN_MS`）経過したら実際にそのフォルダを開く処理を呼びます。対象から外れたら（`clearHoverFolder`）タイマーとハイライトをリセットします。
+
+> **★ 2026/09/05 追記（見失いへの猶予）**：「フォルダ同士を重ねても中に移動
+> できない（ことがある）」という報告を受けて調査したところ、指先のわずかな
+> 震え・`elementFromPoint`の一瞬の誤検出などでフォルダの真上から一瞬だけ外れると、
+> `checkHoverFolder`の`else`分岐がその場で`clearHoverFolder()`を呼び、
+> `hoverFolderTimer`（0.65秒の判定タイマー）ごとリセットしてしまっていた。
+> 指を完全に静止させ続けるのは難しいため、これが起き続けると**タイマーが
+> 一度も完了せず、いつまで経ってもフォルダが開かない**ように見える。
+> 対策として、対象を見失っても即座には`clearHoverFolder()`せず、
+> `HOVER_MISS_GRACE_MS`（200ms）だけ待ってから消す`scheduleClearHoverFolder()`
+> を新設し、`checkHoverFolder`の`else`分岐をこちらに差し替えた。猶予時間内に
+> `applyHoverTarget`が再び呼ばれれば（＝対象を再検出できれば）、保留中の
+> クリア予約はキャンセルされ、進行中の0.65秒タイマーは途切れずに継続する。
 
 ---
 
