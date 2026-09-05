@@ -264,12 +264,14 @@ async function startStudyMode(mode) {
   document.getElementById('study-content').style.display = 'flex';
   renderStudyCard();
   loadUnderstandingBadge(); // ★ 追加：みんなの「わかる率」を右上に読み込む（非同期・表示はブロックしない）
-  maybeAutoStartStudyTimer(`CardMaker「${studyBaseTitle}」をプレイ`); // ★ 2026/09/05 追加：勉強ログのタイマーが止まっていれば自動計測を始める
+  // ★ 2026/09/05 追加：勉強ログのタイマーが止まっていれば自動計測を始める。
+  //   科目はプレイ中のデッキのもの（フォルダをまとめてプレイ中は科目が1つに定まらないため無し）を引き継ぐ。
+  maybeAutoStartStudyTimer(`CardMaker「${studyBaseTitle}」をプレイ`, studyIsFolder ? null : (quizDeck && quizDeck.subject));
 }
 ```
 - フォルダをまとめて学習している場合、各カードに`__deckId`（元々どのデッキに属していたか）を付け足しておきます。これは、フォルダ横断で1つの学習セッションとして扱いながらも、「このカードはどのデッキ由来か」を後から参照できるようにするための工夫です（学習画面での「わからない」マークの保存先や、カード編集時にどのデッキを更新すべきか、を判断するのに使われます）。
 - 新しく選び直した場合は、古い「続きから」のデータは矛盾するため`clearStudyProgress`で消しておきます。
-- **★ 2026/09/05 追記**：`maybeAutoStartStudyTimer(memo)`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「みんなの『わかる率』バッジ」の少し後ろに定義）が、勉強ログ（StudyLog）のタイマーが動いていなければ自動的に計測を開始する。`startStudyMode()`はデッキ/フォルダ学習の唯一の入口（「すべて」「わからないだけ」「続きから」の3モード共通）なので、ここ1箇所に足すだけで全ての学習開始パターンをカバーできる。実装の詳細（サーバーAPI呼び出し・StudyLog側でのメモの引き継ぎ）は[04_StudyLog.js_その4_タイマー機能.md](../04_StudyLog/04_StudyLog.js_その4_タイマー機能.md)の7.4節を参照。
+- **★ 2026/09/05 追記**：`maybeAutoStartStudyTimer(memo, subject)`（[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の「みんなの『わかる率』バッジ」の少し後ろに定義）が、勉強ログ（StudyLog）のタイマーが動いていなければ自動的に計測を開始する。`startStudyMode()`はデッキ/フォルダ学習の唯一の入口（「すべて」「わからないだけ」「続きから」の3モード共通）なので、ここ1箇所に足すだけで全ての学習開始パターンをカバーできる。`subject`は関数冒頭で定義済みの`quizDeck`（`!studyIsFolder`のときの現在のデッキ）からそのまま引ける。学習の終わり（完走・途中終了どちらも）に対応する`finishAutoTimerIfPending()`の呼び出し箇所（`renderStudyCard`の完了分岐・`showScreen`）については次節および[04_StudyLog.js_その4_タイマー機能.md](../04_StudyLog/04_StudyLog.js_その4_タイマー機能.md)の7.4節を参照。
 
 ---
 

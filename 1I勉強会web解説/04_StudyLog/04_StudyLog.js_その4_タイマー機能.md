@@ -355,17 +355,30 @@ async function timerStop() {
 - コメントに重要な設計判断が書かれています：「ここではまだ保存/破棄が決まっていないため、サーバー側の記録はすぐに消さず『一時停止』扱いで経過時間だけ確定させておく。これにより他の端末には『一時停止しました』と正しく伝わり、計測中の表示が理由もなく途中でリセットされるのを防げる。実際にサーバー側の記録を消すのは、保存または破棄が確定した時」。「ストップ」ボタンを押した直後は、確認画面（保存するか、破棄するか、まだ迷える状態）に過ぎないため、サーバー側のデータもまだ完全には消さず、あくまで「一時停止」という中間状態にとどめています。
 - 1分未満の計測は、記録として残す価値が無いと判断され、その場で自動的に破棄されます。
 
-### 7.4 ★ 2026/09/05 追記：CardMakerからの自動計測開始とメモの引き継ぎ
+### 7.4 ★ 2026/09/05 追記：CardMakerからの自動計測・自動記録の連携
 
-「CardMakerをプレイした場合、勉強ログのタイマーが起動していなければ自動で計測。メモ欄には、CardMaker「〇〇」をプレイ　にする」という要望を受けて追加した連携。CardMakerとStudyLogは別ページ（`Cardmaker.html`/`StudyLog.html`）だが、同一オリジンなので`localStorage`を共有できることを利用している。
+「CardMakerをプレイした場合、勉強ログのタイマーが起動していなければ自動で計測。メモ欄には、CardMaker「〇〇」をプレイ　にする」「途中終了だとカウントされ続けちゃう。最後まで行くまたは途中で終了したらタイマー止めて自動記録」「科目もそのデッキの科目に合わせて」という3段階の要望を受けて追加した連携。CardMakerとStudyLogは別ページ（`Cardmaker.html`/`StudyLog.html`）だが、同一オリジンなので`localStorage`を共有できることを利用している。
 
-**CardMaker側**（`Cardmaker.js`の`maybeAutoStartStudyTimer(memo)`、`startStudyMode()`が学習画面を開くたびに呼ぶ）：
+**開始（CardMaker側、`maybeAutoStartStudyTimer(memo, subject)`。`startStudyMode()`が学習画面を開くたびに呼ぶ）**：
 1. `GET /timer_state`でタイマーの現在状態を確認する。
 2. `"idle"`（誰も計測していない）のときだけ`POST /timer_start`でこの本人の計測を開始する。既に`"running"`／`"paused"`（本人が既に何かを計測中）なら何もしない＝横取りしない。
-3. 開始できたら、`localStorage`のキー`"cm_pending_timer_memo"`に`{ memo: "CardMaker「◯◯」をプレイ", ts: Date.now() }`を保存しておく（◯◯はプレイ中のデッキ名／フォルダ名＝`studyBaseTitle`）。
-4. 全体を`try/catch`で囲み、ログインしていない・通信に失敗した場合は何もしない（プレイ自体は絶対に止めないベストエフォート）。
+3. 開始できたら、`localStorage`のキー`"cm_pending_timer_memo"`に`{ memo: "CardMaker「◯◯」をプレイ", subject: deck.subject, ts: Date.now() }`を保存しておく。◯◯はプレイ中のデッキ名／フォルダ名（`studyBaseTitle`）、`subject`はプレイ中のデッキが持つ科目（フォルダをまとめてプレイ中は科目が1つに定まらないため`null`）。CardMakerの科目プルダウン（`modal-rename-subject`）とStudyLogの科目プルダウン（`SUBJECTS`）はどちらも同じ`/channels`（Discordのチャンネル名一覧）から作られているため、文字列がそのまま一致する。
+4. このキーは「まだ誰も（CardMaker自身も含めて）このタイマーを片付けていない」ことの目印としても使われる（後述）。
+5. 全体を`try/catch`で囲み、ログインしていない・通信に失敗した場合は何もしない（プレイ自体は絶対に止めないベストエフォート）。
 
-**StudyLog側**（`consumePendingTimerMemo()`、新設）：
+**終了（CardMaker側、`finishAutoTimerIfPending()`。以下2箇所から呼ばれる）**：
+- **最後まで完走**：`renderStudyCard()`が`studyIdx >= studyCards.length`（完了画面）に達した瞬間。
+- **途中で画面を離れた**：`showScreen(id)`が、直前まで`screen-study`がアクティブで、かつ`id !== 'study'`（＝学習画面を離れる）ときに呼ぶ。カードの編集モーダルを開くだけ（画面遷移を伴わない）や「もう一度」（`shuffleStudy()`、同じ`screen-study`のまま）では呼ばれない。
+
+処理内容：
+1. `cm_pending_timer_memo`が無ければ何もしない（このプレイでは自動開始していない＝既に本人が別画面で片付け済み、を含む）。
+2. `GET /timer_state`で今も`"running"`か確認する。`"running"`でなければ（既に誰かが止めた等）目印だけ消して終了。
+3. `POST /timer_pause`で一時停止し、確定した`accumulated_sec`を受け取る。1分未満なら`POST /timer_stop`で破棄する（`saveTimer`/`timerStop`の「1分未満は記録できません」と同じ基準）。
+4. `pending.subject`が無ければ**自動保存できない**（`/add_study_log`は科目必須のため）。この場合は`timer_pause`で確定済みの「一時停止」状態のままサーバーに残し、目印（`cm_pending_timer_memo`）も消さずに終える。データは失われず、次に本人がStudyLogを開いたときに`timerStop()`→`consumePendingTimerMemo()`の通常経路でメモ（と、分かっていれば科目）が引き継がれて手動で保存できる。
+5. `pending.subject`があれば`POST /add_study_log`（`method: "timer"`、`date`は`new Date().toISOString().slice(0,10)`＝`todayStr()`と同じ形式）でそのまま記録し、成功したら`POST /timer_stop`でサーバー側のタイマーを片付け、目印も消す。保存自体が失敗した場合（例：サーバー側の不正防止クールダウンに引っかかった等）は何もしない＝一時停止のまま残し、後で手動対応できるようにする。
+6. 全体を`try/catch`で囲んだベストエフォート。
+
+**引き継ぎ（StudyLog側、`consumePendingTimerMemo()`）**：
 ```js
 function consumePendingTimerMemo() {
   var KEY = "cm_pending_timer_memo";
@@ -377,13 +390,13 @@ function consumePendingTimerMemo() {
     if (!data || !data.memo || !data.ts) return null;
     var ONE_DAY_MS = 24 * 60 * 60 * 1000;
     if (Date.now() - data.ts > ONE_DAY_MS) return null;
-    return data.memo;
+    return { memo: data.memo, subject: data.subject || null };
   } catch (e) { return null; }
 }
 ```
 - `timerStop()`（確認画面を出す直前）で必ず1回呼ぶ。保存に至るか（`mins >= 1`）1分未満で自動破棄されるかに関わらず、**停止のたびに必ず消費**する（`localStorage.removeItem`を先に呼んでから中身を見ている点に注目）。これにより、次に始まる無関係なタイマー（例：後日、本人がCardMakerを経由せず手動で開始したもの）に古いメモが紛れ込むことを防ぐ。
 - `ts`（開始時刻）が1日以上前なら`null`を返して無視する。CardMaker側で開始だけして何日も停止せずに放置していたような場合、久しぶりに停止したときに古い（もう文脈を忘れているであろう）メモが誤って復元されるのを避けるための保険。
-- 戻り値がある場合だけ`timerStop()`が`conf-memo`欄に代入する。無ければ何もしない＝従来通り空欄のまま（手動で開始した通常のタイマーの見た目は一切変わらない）。
+- 戻り値がある場合、`timerStop()`が`conf-memo`欄に`memo`を代入する。`subject`があれば、`conf-subject`の`<option>`に一致するものがある場合だけ選択する（`SUBJECTS`に無い値なら既定のまま＝選択肢自体が存在しないため）。実運用では、この経路（StudyLog側での引き継ぎ）が使われるのは主に「CardMaker側で科目が分からず自動保存できなかった」ケースで、科目が分かっている場合は通常`finishAutoTimerIfPending()`が先に保存・後片付けまで終えている。
 
 ---
 
