@@ -195,10 +195,10 @@ iOSのホーム画面でアプリのアイコンを別のアプリの上に重�
 function checkHoverFolder(clientX, clientY) {
   if (!dragEl || hoverOpenInProgress) return;
 
-  // ① まず「パンくず付近まで持ち上げたら親フォルダへ戻る」ゾーンを判定する
+  // ① まず「一覧の上端まで持ち上げたら親フォルダへ戻る」ゾーンを判定する
   //   （フォルダの中にいる時だけ。ルート表示中は戻り先が無いので対象外）
   const exitZone = getExitZoneRect();
-  if (exitZone && clientY <= exitZone.bottom) {
+  if (exitZone && dragEl.getBoundingClientRect().top <= exitZone.bottom) {
     const parentFolder = folders.find(f => f.id === currentFolderId);
     const parentId = parentFolder ? (parentFolder.parentId ?? null) : null;
     const dragKey = dragEl.dataset.key;
@@ -211,8 +211,10 @@ function checkHoverFolder(clientX, clientY) {
     }
     if (ok) {
       applyHoverTarget(exitZone.el, parentId);
-      return;
+    } else {
+      applyBlockedHoverTarget(exitZone.el);
     }
+    return;
   }
 
   // dragEl自身が指の真下にあるとelementFromPointがそれを拾ってしまうため、
@@ -223,56 +225,39 @@ function checkHoverFolder(clientX, clientY) {
   dragEl.style.pointerEvents = prevPE;
 
   const folderCard = under ? under.closest('.folder-card') : null;
-  let targetFolderId = null;
 
   if (folderCard && folderCard.parentElement === grid && folderCard !== dragEl) {
     const fid = folderCard.dataset.key.slice('folder:'.length);
     const dragKey = dragEl.dataset.key;
     // 掴んでいるのがフォルダで、その移動先が自分自身／自分の子孫フォルダの場合は
     // 開けない（無限ループ・不正な階層構造の防止。canMoveFolderToで判定）
+    let allowed;
     if (dragKey.startsWith('folder:')) {
-      const draggedFolderId = dragKey.slice('folder:'.length);
-      if (canMoveFolderTo(draggedFolderId, fid)) targetFolderId = fid;
+      allowed = canMoveFolderTo(dragKey.slice('folder:'.length), fid);
     } else {
       const deckId = resolveDeckIdFromDragKey(dragKey);
-      if (!deckId || canMoveDeckTo(deckId, fid)) targetFolderId = fid;
+      allowed = !deckId || canMoveDeckTo(deckId, fid);
     }
+    if (allowed) {
+      applyHoverTarget(folderCard, fid);
+    } else {
+      applyBlockedHoverTarget(folderCard);
+    }
+    return;
   }
 
-  if (targetFolderId) {
-    applyHoverTarget(folderCard, targetFolderId);
-  } else {
-    clearHoverFolder();
-  }
+  scheduleClearHoverFolder();
+  clearBlockedHover();
 }
 ```
 - `document.elementFromPoint(x, y)`で「指の真下に今何が表示されているか」を調べます。ただし、そのままだと掴んでいるカード自身（指のすぐ下にあるので）が拾われてしまうため、判定する一瞬だけ`pointerEvents = 'none'`（このカードはクリック・タップの対象外、と一時的に無効化する）にして、その裏にある本当のフォルダを検出できるようにしています。
 - 見つかったフォルダが、今掴んでいる項目の移動先として許可されているか（`canMoveFolderTo`/`canMoveDeckTo`、[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）も確認します。
-- 「パンくず付近まで持ち上げたら親フォルダに戻れる」という逆方向の操作（`getExitZoneRect`）も同じ仕組みで実現しています。フォルダを「開く」動きも「出る（親に戻る）」動きも、結局は「今のフォルダから、目的のフォルダIDへ移動する」という同じ処理（次節の`autoOpenFolderDuringDrag`）で扱えるためです。
-
-> **★ 2026/09/04 追記（バグ修正）**：次節`autoOpenFolderDuringDrag`のフォルダ分岐が
-> サーバーへ送るリクエストに`guild_id`/`session_token`を含めておらず、
-> サーバー側の`require_login_json`に「missing guild_id」で常に弾かれていた
-> （＝フォルダをドラッグして別フォルダへ入れても、ローカルの見た目上は移動した
-> ように見えるのに、実際にはサーバーへ一度も反映されていなかった）。デッキメニュー
-> の「移動」（`selectMoveTarget`）側は元々`guild_id`/`session_token`を送っていて
-> 無事だったため、この2つの経路で挙動が食い違っていた形。次節のコードにこの
-> 2フィールドを追加して修正した。
-
-> **★ 2026/09/05 追記（受け皿の変更）**：`getExitZoneRect()`が参照する対象が
-> パンくずリスト（`#folder-breadcrumb`、±16pxの余白）から、専用の受け皿バー
-> （`#folder-exit-dropzone`、`Cardmaker.html`に新設）へ変わった。この受け皿は
-> `.topbar`の直下・`.cm-scroll-body`の外に置かれた「ドラッグ中かつフォルダの
-> 中にいる間だけ表示される」大きめのバーで、`beginDrag()`/`autoOpenFolderDuringDrag()`
-> （フォルダの出入りで`currentFolderId`が変わるたび）/`endDrag()`から呼ばれる
-> `updateFolderExitDropzoneVisibility()`が表示・非表示を管理する。パンくず（狭く、
-> スクロールで見えなくなることもある）に正確に指を重ねる必要があったのを、
-> 画面上部いっぱいの当てやすいスペースに変えたことで、「フォルダから出す」操作の
-> 成功率を上げる狙い。`getExitZoneRect()`の戻り値の形（`{top, bottom, el}`）自体は
-> 変わっていないので、`checkHoverFolder`側の呼び出し方には変更が無い。
+- 「一覧の上端まで持ち上げたら親フォルダに戻れる」という逆方向の操作（`getExitZoneRect`）も同じ仕組みで実現しています。フォルダを「開く」動きも「出る（親に戻る）」動きも、結局は「今のフォルダから、目的のフォルダIDへ移動する」という同じ処理（次節の`autoOpenFolderDuringDrag`）で扱えるためです。
 
 ```js
 function applyHoverTarget(el, targetFolderId) {
+  clearBlockedHover();
+  if (hoverClearTimer) { clearTimeout(hoverClearTimer); hoverClearTimer = null; }
   if (hoverFolderEl === el) return;
   clearHoverFolder();
   hoverFolderEl = el;
@@ -280,21 +265,73 @@ function applyHoverTarget(el, targetFolderId) {
   hoverFolderEl.style.outlineOffset = '-3px';
   hoverFolderTimer = setTimeout(() => { hoverFolderTimer = null; autoOpenFolderDuringDrag(targetFolderId); }, HOVER_OPEN_MS);
 }
+
+function scheduleClearHoverFolder() {
+  if (!hoverFolderEl || hoverClearTimer) return;
+  hoverClearTimer = setTimeout(() => { hoverClearTimer = null; clearHoverFolder(); }, HOVER_MISS_GRACE_MS);
+}
+
+function clearHoverFolder() {
+  if (hoverClearTimer) { clearTimeout(hoverClearTimer); hoverClearTimer = null; }
+  if (hoverFolderTimer) { clearTimeout(hoverFolderTimer); hoverFolderTimer = null; }
+  if (hoverFolderEl) {
+    hoverFolderEl.style.outline = '';
+    hoverFolderEl.style.outlineOffset = '';
+    hoverFolderEl = null;
+  }
+}
+
+function applyBlockedHoverTarget(el) {
+  clearHoverFolder();
+  if (hoverBlockedEl === el) return;
+  clearBlockedHover();
+  hoverBlockedEl = el;
+  hoverBlockedEl.style.outline = '3px solid #ef4444';
+  hoverBlockedEl.style.outlineOffset = '-3px';
+}
+
+function clearBlockedHover() {
+  if (hoverBlockedEl) {
+    hoverBlockedEl.style.outline = '';
+    hoverBlockedEl.style.outlineOffset = '';
+    hoverBlockedEl = null;
+  }
+}
 ```
 - 同じフォルダの上に留まり続けている間だけ青い枠線でハイライトし、0.65秒（`HOVER_OPEN_MS`）経過したら実際にそのフォルダを開く処理を呼びます。対象から外れたら（`clearHoverFolder`）タイマーとハイライトをリセットします。
+- 無効な移動先（後述）には赤枠（`hoverBlockedEl`）で「開けるホバー」とは別の状態を示します。2つの状態は独立していて、どちらへ切り替わるときも相手側を消してから自分を立てる、という対称的な構造になっています。
 
-> **★ 2026/09/05 追記（見失いへの猶予）**：「フォルダ同士を重ねても中に移動
-> できない（ことがある）」という報告を受けて調査したところ、指先のわずかな
-> 震え・`elementFromPoint`の一瞬の誤検出などでフォルダの真上から一瞬だけ外れると、
-> `checkHoverFolder`の`else`分岐がその場で`clearHoverFolder()`を呼び、
-> `hoverFolderTimer`（0.65秒の判定タイマー）ごとリセットしてしまっていた。
-> 指を完全に静止させ続けるのは難しいため、これが起き続けると**タイマーが
-> 一度も完了せず、いつまで経ってもフォルダが開かない**ように見える。
-> 対策として、対象を見失っても即座には`clearHoverFolder()`せず、
-> `HOVER_MISS_GRACE_MS`（200ms）だけ待ってから消す`scheduleClearHoverFolder()`
-> を新設し、`checkHoverFolder`の`else`分岐をこちらに差し替えた。猶予時間内に
-> `applyHoverTarget`が再び呼ばれれば（＝対象を再検出できれば）、保留中の
-> クリア予約はキャンセルされ、進行中の0.65秒タイマーは途切れずに継続する。
+> **★ この節の変更履歴（初版からの主な変更点）**
+> - **2026/09/04**：フォルダ移動が実際にはサーバーへ反映されていなかったバグを
+>   修正（次節`autoOpenFolderDuringDrag`のフォルダ分岐が`guild_id`/`session_token`
+>   を送っておらず、サーバー側`require_login_json`に「missing guild_id」で
+>   常に弾かれていた。デッキメニューの「移動」＝`selectMoveTarget`は元々
+>   送っていたため無事だった）。
+> - **2026/09/05（受け皿の変更）**：`getExitZoneRect()`が参照する対象を、パンくず
+>   リスト（`#folder-breadcrumb`、±16pxの余白。狭くスクロールで見えなくなることも
+>   あった）から、専用の受け皿バー（`#folder-exit-dropzone`、`Cardmaker.html`に
+>   新設。`.topbar`の直下・`.cm-scroll-body`の外＝スクロール領域の外に常時いる）
+>   へ変更。表示・非表示は`beginDrag()`/`autoOpenFolderDuringDrag()`（フォルダの
+>   出入りで`currentFolderId`が変わるたび）/`endDrag()`から呼ばれる
+>   `updateFolderExitDropzoneVisibility()`が管理する。
+> - **2026/09/05（見失いへの猶予）**：指先のわずかな震え・`elementFromPoint`の
+>   一瞬の誤検出でフォルダの真上から一瞬だけ外れると、即座に`clearHoverFolder()`
+>   していたことで`hoverFolderTimer`（0.65秒の判定タイマー）ごとリセットされ続け、
+>   「フォルダに重ねても一向に開かない」ように見える不具合があった。対象を
+>   見失っても`HOVER_MISS_GRACE_MS`（200ms）待ってから消す`scheduleClearHoverFolder()`
+>   を新設し、猶予中に再検出できればクリア予約をキャンセルするようにした。
+> - **2026/09/05（上端判定をカード基準に）**：①の受け皿は`.cm-scroll-body`の外に
+>   あるため、指の生の位置（`clientY`）で判定すると、カードの見た目は
+>   `.cm-scroll-body`の`overflow`によってその上端でクリップされ先に見えなくなって
+>   しまい（＝掴んでいる位置とカード自身の上端がずれている場合、見た目が消えた後も
+>   さらに指を動かし続けないと反応しない）分かりにくかった。判定基準を`clientY`から
+>   `dragEl.getBoundingClientRect().top`（＝カード自身の見た目の上端）に変更し、
+>   カードが隠れ始めるのとほぼ同時に反応するようにした。
+> - **2026/09/05（無効な移動先への赤枠）**：`canMoveFolderTo`/`canMoveDeckTo`が
+>   `false`を返すケース（例：フォルダの階層が上限の3階層に達している）に重ねても
+>   従来は何も起きなかった（＝反応していないだけに見えた）ため、`applyBlockedHoverTarget`/
+>   `clearBlockedHover`を新設し、赤枠で「ここには移動できない」ことを示すようにした
+>   （自動では開かない。青枠＝`hoverFolderEl`の「開けるホバー」とは別の独立した状態）。
 
 ---
 
