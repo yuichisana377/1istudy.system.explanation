@@ -54,11 +54,11 @@ JST = timezone("Asia/Tokyo")
 ## 2. Discord OAuth2の設定（53〜82行）
 
 ```python
-DISCORD_CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "1515358957542047975")
+DISCORD_CLIENT_ID     = os.getenv("DISCORD_CLIENT_ID", "1518551360055021650")
 DISCORD_CLIENT_SECRET = os.getenv("DISCORD_CLIENT_SECRET")
 DISCORD_OAUTH_REDIRECT_URI = os.getenv(
     "DISCORD_OAUTH_REDIRECT_URI",
-    "https://chiro-ubuntuserver.tail1130ba.ts.net/discord_oauth_callback"
+    "https://study-web.chiro377.com/discord_oauth_callback"
 )
 if not DISCORD_CLIENT_SECRET:
     print("[WARN] 環境変数 DISCORD_CLIENT_SECRET が未設定です。...")

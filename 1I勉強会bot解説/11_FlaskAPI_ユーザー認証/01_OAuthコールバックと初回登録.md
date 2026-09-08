@@ -21,7 +21,7 @@ def _oauth_result_page(success: bool, message: str) -> str:
     <div style="font-size:15px;color:#334155;line-height:1.6;">{message}</div>
     <div style="font-size:12px;color:#94a3b8;margin-top:16px;">3秒後にStudyLogへ戻ります…</div>
   </div>
-  <script>setTimeout(function() {{ location.href = "https://1istudyweb.pages.dev/StudyLog"; }}, 3000);</script>
+  <script>setTimeout(function() {{ location.href = "https://study-web.chiro377.com/StudyLog"; }}, 3000);</script>
 </body></html>"""
 ```
 - Discordの認可画面から戻ってきた直後、ブラウザに一瞬だけ表示される「連携が完了しました」のような結果画面を、Flaskが**HTML文字列をその場で組み立てて**返しています。これまでのAPIのように`jsonify`でJSONを返すのではなく、Flaskのルート関数はこのように文字列（HTMLそのもの）を返すこともできます。
@@ -147,7 +147,7 @@ def _guild_membership_status(guild_id: int, discord_user_id: int) -> str:
 
 コメントに設計上の重要なポイントが3つまとめられています。
 - 「全員に登録し直してもらう」方針のため、既存の`discord_links`（`/id連携`のコード方式で作られたDM通知用の紐付け）は**ログイン用途では一切信用しません**。`discord_login_links`（ログイン専用の別ファイル）に登録済みの場合のみ、そのままログインさせます。
-- このエンドポイント自体はAPIドメイン（`python-bot-1istudy.onrender.com`のようなバックエンドのドメイン）で動いているため、ここで直接`localStorage`にセッションを書き込んでも、フロントエンド（`1istudyweb.pages.dev`）からは見えません（**ブラウザの`localStorage`はドメインごとに独立しており、異なるドメイン間では共有されない**という仕様のため）。そのため、セッション情報はURLのクエリパラメータとしてフロントエンドへ渡し、フロントエンド自身のJS（`Login.js`）がそちらのドメイン上で`localStorage`に保存します。
+- このエンドポイント自体はAPIドメイン（`python-bot-1istudy.onrender.com`のようなバックエンドのドメイン）で動いているため、ここで直接`localStorage`にセッションを書き込んでも、フロントエンド（`study-web.chiro377.com`）からは見えません（**ブラウザの`localStorage`はドメインごとに独立しており、異なるドメイン間では共有されない**という仕様のため）。そのため、セッション情報はURLのクエリパラメータとしてフロントエンドへ渡し、フロントエンド自身のJS（`Login.js`）がそちらのドメイン上で`localStorage`に保存します。
 - Discordログイン自体は、対象サーバーに参加していないアカウントでも成功させます（完全ブロックはしません）。ただし参加していない場合は「制限付きアカウント」として扱われます（[../05_ユーザーとセッション/01_セッショントークンと権限チェック.md](../05_ユーザーとセッション/01_セッショントークンと権限チェック.md)で見た通りです）。
 
 ```python
@@ -166,10 +166,10 @@ def _handle_discord_login_callback(guild_id: int, discord_user_id: int, discord_
                 "student_id": student_id,
                 "nickname": nickname,
             })
-            return redirect(f"https://1istudyweb.pages.dev/Login?{qs}")
+            return redirect(f"https://study-web.chiro377.com/Login?{qs}")
 
     reg_token = issue_discord_reg_token(guild_id, discord_user_id, discord_username)
-    return redirect(f"https://1istudyweb.pages.dev/Login?discord_reg={reg_token}")
+    return redirect(f"https://study-web.chiro377.com/Login?discord_reg={reg_token}")
 ```
 - `login_links.items()`（`{学籍番号: DiscordユーザーID}`）を1件ずつ確認し、**逆方向**（DiscordユーザーIDから学籍番号を探す）の検索をしています。`next((sid for sid, did in login_links.items() if int(did) == discord_user_id), None)`は、値の側から一致するキーを探すジェネレータ式です。
 - 既に登録済み（`student_id`が見つかり、かつ対応する`user`データも存在する）なら、[../05_ユーザーとセッション/01_セッショントークンと権限チェック.md](../05_ユーザーとセッション/01_セッショントークンと権限チェック.md)の`create_session`でセッショントークンを発行し、`_notify_new_login`（新規ログインの通知。後述）を呼んだ上で、**トークンをURLのクエリパラメータに載せて**フロントエンドへリダイレクトします。コメントの通り、これはドメインをまたいで安全に`localStorage`へ受け渡すための、意図的な設計です。

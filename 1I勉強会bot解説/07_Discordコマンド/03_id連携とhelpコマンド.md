@@ -91,7 +91,7 @@ async def help_command(interaction: discord.Interaction):
         "**/setchannel** — 通知チャンネルを設定する（通生／寮生／お知らせ用を選択可）\n"
         "**/setup_roles** — 通生/寮生 振り分けパネルを投稿する\n"
         "**/id連携** — StudyLogにログインして発行した連携コードを使い、DiscordアカウントをStudyLogと連携する（DM通知を受け取れるようになる）\n"
-        "**webページ** - https://1istudyweb.pages.dev/\n"
+        "**webページ** - https://study-web.chiro377.com/\n"
     )
     await interaction.response.send_message(msg, ephemeral=True)
 ```
