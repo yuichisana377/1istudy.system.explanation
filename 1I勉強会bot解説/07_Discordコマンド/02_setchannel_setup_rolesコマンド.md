@@ -1,4 +1,4 @@
-# `/setchannel`・`/setup_roles`・リアクション振り分け（`bot.py` 1773〜1955行）
+# `/setchannel`・`/setup_roles`・リアクション振り分け（`bot.py` 1991〜2307行）
 
 対象：`bot.py`の「/setchannel」「/setup_roles（通生/寮生 振り分けパネル）」セクション。
 
@@ -42,11 +42,11 @@ async def setchannel(interaction: discord.Interaction, type: app_commands.Choice
 - 選ばれた種類に応じて、`config`（このguildの設定）の対応するフィールドに、**今このコマンドを実行したチャンネルのID**（`interaction.channel.id`）を保存します。「このコマンドを実行したチャンネル自体が、その種類の通知先になる」という直感的な設定方法です。
 - 保存された`config`は、後述する自動通知の章（`send_tomorrow_plans`など）で、「どのチャンネルに通知を送るか」を決めるために読み込まれることになります。
 
-## 2. `/setup_roles`：通生/寮生の振り分けパネル（1832〜1892行）
+## 2. `/setup_roles`：通生/寮生の振り分けパネル（2138〜2198行）
 
 これは、生徒が絵文字のリアクションを押すだけで「通生」または「寮生」のロール（Discordのメンバーに付けられる役職・グループのようなもの）を自動的に付け外しできるようにする機能です。
 
-### 2-0. `_migrate_role_panels`：複数枚のパネルを配列で管理する（1808〜1826行）
+### 2-0. `_migrate_role_panels`：複数枚のパネルを配列で管理する（2114〜2132行）
 
 ```python
 def _migrate_role_panels(config: dict) -> list:
@@ -151,11 +151,37 @@ async def setup_roles_error(interaction: discord.Interaction, error: app_command
 ```
 - `@setup_roles.error`… `setup_roles`コマンドの実行中にエラーが起きたときに呼ばれる、専用のエラーハンドラーです。特に`app_commands.MissingPermissions`（先ほどの権限チェックに引っかかった場合に自動的に発生する例外）を`isinstance`で判定し、分かりやすい日本語のメッセージに変換して返しています。それ以外の予期しないエラーは、そのままエラー内容を表示します。
 
-## 3. リアクションの監視と実際のロール付け外し（1895〜1955行）
+## 3. リアクションの監視と実際のロール付け外し（2201〜2307行）
+
+パネルを複数枚投稿できるようになったこと自体は「2-0」の`_migrate_role_panels`で
+対応済みでしたが、その後の実運用で「複数枚投稿した状態で、片方のパネルで
+選び直しても、もう片方のパネルには古いリアクションが残り続け、それを見た
+本人が押し直すとロールの状態が行ったり来たりしてしまう（最悪、通生・寮生
+どちらのロールも付いた状態になり得る）」という不具合が見つかり、後日
+修正されました。以下はその修正後のコードです。
+
+```python
+_role_reaction_locks: dict[tuple[int, int], asyncio.Lock] = {}
+
+
+def _get_role_reaction_lock(guild_id: int, user_id: int) -> asyncio.Lock:
+    key = (guild_id, user_id)
+    lock = _role_reaction_locks.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _role_reaction_locks[key] = lock
+    return lock
+```
+- `_role_reaction_locks`… `(guild_id, user_id)`をキーにした`asyncio.Lock`（非同期処理版の「同時に1つの処理しか入れない部屋の鍵」）を溜めておく辞書です。`_get_role_reaction_lock`は、そのペアの鍵がまだ無ければ新しく作って登録し、あれば使い回します。
+- **これが要る理由**：同じ人が立て続けに別々のパネルへリアクションすると、`_handle_role_reaction`の2つの呼び出しがほぼ同時に（非同期タスクとして並行に）走ることがあります。片方が「通生ロールを付与→寮生ロールを持っていれば外す」という一連のDiscord API呼び出しの途中に、もう片方が「寮生ロールを付与→通生ロールを持っていれば外す」を始めてしまうと、お互いが相手の処理途中の中途半端な状態を見てしまい、想定通りに付け外しが終わらないことがあります。同じ人については必ず1件ずつ順番に処理させることで、この競合を防いでいます。
 
 ```python
 async def _handle_role_reaction(payload: discord.RawReactionActionEvent, add: bool):
     if payload.guild_id is None:
+        return
+
+    emoji = str(payload.emoji)
+    if emoji not in (EMOJI_COMMUTER, EMOJI_DORM):
         return
 
     config = await async_load_config(payload.guild_id)
@@ -163,14 +189,9 @@ async def _handle_role_reaction(payload: discord.RawReactionActionEvent, add: bo
     panel = next((p for p in panels if p.get("message_id") == payload.message_id), None)
     if panel is None:
         return
-    panel_message_id = panel["message_id"]
-
-    emoji = str(payload.emoji)
-    if emoji not in (EMOJI_COMMUTER, EMOJI_DORM):
-        return
 ```
 - `RawReactionActionEvent`… メッセージへのリアクションの追加・削除という「生の」イベント情報です。「生の」と付いているのは、Discord.pyには「メッセージがBotのキャッシュに載っていなくても発生する」低レベルなイベント（Raw版）と、「キャッシュに載っているメッセージに対してだけ発生する」より扱いやすい高レベルなイベントの2種類があり、ここでは前者（Raw版）を使っているためです。パネルメッセージがBotの起動後しばらく経ってキャッシュから外れていても、確実にリアクションを検知できるようにするためです。
-- **早期リターンの積み重ね**によるフィルタリングになっています。DMでのリアクション（`guild_id is None`）は無視します。次に、`_migrate_role_panels`で取得したパネル一覧の中から、`next(...)`（ジェネレータ式に一致する最初の要素を探し、無ければ`None`を返す組み込み関数）で「今リアクションされたメッセージID」と一致するパネルを探します。以前はパネル情報が1件しか無かったため単純な一致比較で済んでいましたが、複数枚のパネルが存在しうる今は、**このメッセージがどのパネルなのか**をリストから特定する必要があります。一致するパネルが無ければ（＝振り分けパネルとは無関係な、サーバー内の他のメッセージへのリアクションであれば）何もせず終了し、🚃🏠以外の絵文字も無視します。
+- **早期リターンの積み重ね**によるフィルタリングになっています。DMでのリアクション（`guild_id is None`）は無視し、続けて🚃🏠以外の絵文字も無視します（この絵文字チェックを`config`の読み込みより先に持ってきたのは、無関係な絵文字へのリアクションのたびに無駄なファイル読み込みをしないための軽い最適化です）。そのうえで、`_migrate_role_panels`で取得したパネル一覧の中から、`next(...)`（ジェネレータ式に一致する最初の要素を探し、無ければ`None`を返す組み込み関数）で「今リアクションされたメッセージID」と一致するパネルを探します。複数枚のパネルが存在しうるため、**このメッセージがどのパネルなのか**をリストから特定する必要があります。一致するパネルが無ければ（＝振り分けパネルとは無関係な、サーバー内の他のメッセージへのリアクションであれば）何もせず終了します。
 
 ```python
     guild = bot.get_guild(payload.guild_id)
@@ -183,39 +204,61 @@ async def _handle_role_reaction(payload: discord.RawReactionActionEvent, add: bo
 
     commuter_role = guild.get_role(panel.get("commuter_role_id"))
     dorm_role = guild.get_role(panel.get("dorm_role_id"))
-    channel_id = panel.get("channel_id")
-    channel = guild.get_channel(channel_id) if channel_id else None
 ```
 - `member.is None or member.bot`… リアクションした相手がメンバー情報を取得できない、またはBot自身（もしくは他のBot）である場合は無視します。Botが自分自身のリアクション（`setup_roles`の中で最初に付けた🚃🏠）に反応して無限ループのような処理をしてしまわないようにするための、重要なガードです。
-- ロールID・チャンネルIDの取り出し元が、以前の`config.get(...)`（guild全体で共通のパネル1枚分の情報）から、`panel.get(...)`（上で特定した**そのパネル自身**が持つ情報）に変わっている点に注目してください。パネルごとに別々の通生/寮生ロールを割り当てている場合でも、それぞれのパネルが自分に対応するロールだけを正しく参照できます。
+- ロールID・チャンネルIDの取り出し元が、`config.get(...)`（guild全体で共通のパネル1枚分の情報）ではなく`panel.get(...)`（上で特定した**そのパネル自身**が持つ情報）になっている点に注目してください。パネルごとに別々の通生/寮生ロールを割り当てている場合でも、それぞれのパネルが自分に対応するロールだけを正しく参照できます。
 
 ```python
-    try:
-        if add:
-            if emoji == EMOJI_COMMUTER and commuter_role:
-                await member.add_roles(commuter_role, reason="通生登録")
-                if dorm_role and dorm_role in member.roles:
-                    await member.remove_roles(dorm_role, reason="通生に変更のため")
-                    if channel:
-                        msg = await channel.fetch_message(panel_message_id)
-                        await msg.remove_reaction(EMOJI_DORM, member)
-            elif emoji == EMOJI_DORM and dorm_role:
-                await member.add_roles(dorm_role, reason="寮生登録")
-                if commuter_role and commuter_role in member.roles:
-                    await member.remove_roles(commuter_role, reason="寮生に変更のため")
-                    if channel:
-                        msg = await channel.fetch_message(panel_message_id)
-                        await msg.remove_reaction(EMOJI_COMMUTER, member)
-        else:
-            if emoji == EMOJI_COMMUTER and commuter_role:
-                await member.remove_roles(commuter_role, reason="通生リアクション解除")
-            elif emoji == EMOJI_DORM and dorm_role:
-                await member.remove_roles(dorm_role, reason="寮生リアクション解除")
-    except discord.Forbidden:
-        pass
+    sibling_panels = [
+        p for p in panels
+        if p.get("commuter_role_id") == panel.get("commuter_role_id")
+        and p.get("dorm_role_id") == panel.get("dorm_role_id")
+    ]
+
+    async def _remove_reaction_everywhere(target_emoji: str):
+        for p in sibling_panels:
+            ch_id = p.get("channel_id")
+            msg_id = p.get("message_id")
+            if not ch_id or not msg_id:
+                continue
+            channel = guild.get_channel(ch_id)
+            if channel is None:
+                continue
+            try:
+                msg = await channel.fetch_message(msg_id)
+                await msg.remove_reaction(target_emoji, member)
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
 ```
+- `sibling_panels`… 今回リアクションされたパネルと**通生ロール・寮生ロールの組み合わせが完全に一致する**、他のパネルも含めた一覧です。同じ2つのロールを使うパネルを複数チャンネルに投稿している場合（同じ振り分けを再掲した、など）を想定しています。役職違いの別パネル（例えば学年ごとに別のロールを振り分ける別パネル）まで巻き込まないよう、ロールIDのペアで絞り込んでいます。
+- `_remove_reaction_everywhere(target_emoji)`… `sibling_panels`に含まれる**すべての**パネルのメッセージから、指定した絵文字の、その人のリアクションだけを取り消すヘルパーです。メッセージ取得・リアクション削除のどちらも失敗しうる（メッセージが消されている、Botの権限が足りない等）ため、`try/except`で1枚分の失敗が他のパネルの処理を止めないようにしています。
+
+```python
+    async with _get_role_reaction_lock(payload.guild_id, payload.user_id):
+        try:
+            if add:
+                if emoji == EMOJI_COMMUTER and commuter_role:
+                    await member.add_roles(commuter_role, reason="通生登録")
+                    if dorm_role:
+                        await member.remove_roles(dorm_role, reason="通生に変更のため")
+                        await _remove_reaction_everywhere(EMOJI_DORM)
+                elif emoji == EMOJI_DORM and dorm_role:
+                    await member.add_roles(dorm_role, reason="寮生登録")
+                    if commuter_role:
+                        await member.remove_roles(commuter_role, reason="寮生に変更のため")
+                        await _remove_reaction_everywhere(EMOJI_COMMUTER)
+            else:
+                if emoji == EMOJI_COMMUTER and commuter_role:
+                    await member.remove_roles(commuter_role, reason="通生リアクション解除")
+                elif emoji == EMOJI_DORM and dorm_role:
+                    await member.remove_roles(dorm_role, reason="寮生リアクション解除")
+        except discord.Forbidden:
+            pass
+```
+- `async with _get_role_reaction_lock(...)`… ここから先の一連の処理を、同じ人については1件ずつ順番に実行させます（上で説明した競合対策）。
 - `add`（リアクションが「追加」されたのか「削除」されたのか）で処理を分けます。
-- リアクションが追加された場合（`add=True`）：対応するロールを付与し、**もう片方のロールを既に持っていれば、そちらは自動的に外します**。通生と寮生は普通どちらか一方のはずなので、両方のロールが同時に付いた状態にならないようにする、という業務ロジックです。さらに、外した方のロールに対応する自分のリアクションも、`msg.remove_reaction(EMOJI_DORM, member)`のように**サーバー側から強制的に取り消して**います。これにより、パネル上の見た目（誰がどちらにリアクションしているか）も、実際のロールの状態と食い違わないように保たれます。
+- リアクションが追加された場合（`add=True`）：対応するロールを付与し、**もう片方のロールを常に外そうとします**。以前は`if dorm_role and dorm_role in member.roles:`のように「キャッシュ上そのロールを持っているように見える場合だけ」外す判定でしたが、`member.roles`はDiscordのゲートウェイから届く更新が反映されるまでの間、実際のロール状態より少し遅れることがあります。`member.remove_roles(...)`自体はそのロールを持っていなくても何もせず正常終了するAPIなので、キャッシュを確認せず**常に呼ぶ**方が安全です（キャッシュのズレによる「外し忘れ」＝両方のロールが残ってしまう事故を避けられます）。
+- もう片方のロールを外したら、`_remove_reaction_everywhere`で**同じロールの組み合わせを使う全パネル**から、外した方のロールに対応する絵文字リアクションを取り消します。以前は「今リアクションされたそのパネル自身」のメッセージからしか取り消していなかったため、パネルを複数枚投稿していると、選び直していない方のパネルには古いリアクションがそのまま残ってしまい、それを見た本人が「あれ、こっちにもリアクションしてる」と押し直す（外す）と、対応するロールがまた外れてしまう…という食い違いが起きていました。全パネルから取り消すことで、どのパネルを見てもリアクションの見た目とロールの状態が食い違わないようになっています。
 - リアクションが取り消された場合（`add=False`）：対応するロールを単純に外すだけです。
 - `except discord.Forbidden: pass`… `discord.Forbidden`は、Bot自身の権限不足でロールの付け外しに失敗したときに発生する例外です。この例外を`pass`（何もしない）で握りつぶし、処理全体をクラッシュさせずに終わらせています。前段で「Botより上位のロールでないか」を`setup_roles`実行時に確認していますが、その後でサーバーの権限設定が変更される可能性もあるため、実際の操作時にも念のため同じ種類のエラーに備えている、という2段構えの防御です。
 
