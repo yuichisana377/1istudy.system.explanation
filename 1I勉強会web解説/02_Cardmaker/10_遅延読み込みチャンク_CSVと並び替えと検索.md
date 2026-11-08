@@ -6,7 +6,7 @@
 
 ---
 
-## 1. `Cardmaker-csvimport.js`（246行）— CSV一括読み込み
+## 1. `Cardmaker-csvimport.js`（256行）— CSV一括読み込み
 
 「CSVから読み込む」ボタンから呼ばれる、[04_Cardmaker.js_その4_カード保存と公開.md](04_Cardmaker.js_その4_カード保存と公開.md)で「仮の窓口」として紹介した`handleCsvImport`/`handleChoiceCsvImport`の本体です。通常デッキ用と多肢選択デッキ用の2つの機能が入っています。
 
@@ -72,7 +72,7 @@ function stripBugChars(str) {
 ```
 - [08_Cardmaker.js_その8_画像処理と基盤機能.md](08_Cardmaker.js_その8_画像処理と基盤機能.md)で説明した`findBugChars`（トラブルの元になる特殊文字を見つける関数）を使い、該当する文字だけを取り除いた文字列を返します。手入力のカード作成では警告して入力をやり直させる（`warnIfBugChars`）方式でしたが、CSVの一括読み込みでは1行ごとに確認を挟むのは非現実的なため、**黙って自動的に取り除いてから取り込む**という違う方針を取っています。
 
-### 1.4 通常デッキ用の取り込み：`handleCsvImport(event)`（83〜141行）
+### 1.4 通常デッキ用の取り込み：`handleCsvImport(event)`（83〜146行）
 ```js
 let added = 0, skippedEmpty = 0, skippedDup = 0, sanitized = 0;
 for (const r of dataRows) {
@@ -93,8 +93,9 @@ for (const r of dataRows) {
 - 特殊文字を除去したあと、**除去した結果また空になってしまった場合**（例えば元々「見えない文字」だけの内容だった場合）も同様にスキップします。
 - [01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)の`findDuplicateCardIndex`（完全一致する既存カードが無いか）を使って重複をチェックし、重複していれば`skippedDup`を増やしてスキップします。CSV一括読み込みでは、手入力のとき（`warnIfDuplicateOrSameCard`）のように1件ずつ確認ダイアログを出すのは現実的でないため、確認を挟まず自動でスキップする方針です。
 - 最後に、追加件数・重複スキップ件数・空欄スキップ件数・文字を除去した件数を集計し、`showCmAlert`で1つのメッセージにまとめて報告します。
+- サーバー登録済みのデッキでは、追加後に`queueSyncDeckToServer(deck)`で反映を予約します。2026/11/08からは、この反映が失敗した場合（大量取り込みで10秒の制限に掛かった場合など）にバナーで知らせます。以前は黙って失敗していたため、反映されないまま保存して取り込み分が消える原因になっていました。
 
-### 1.5 多肢選択デッキ用の取り込み：`handleChoiceCsvImport(event)`（143〜246行）
+### 1.5 多肢選択デッキ用の取り込み：`handleChoiceCsvImport(event)`（148〜256行）
 
 考え方は同じですが、列の検出と正解の解釈が複雑になります。
 

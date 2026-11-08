@@ -315,15 +315,18 @@ async function saveRename() {
 
 ---
 
-## 4. サーバー同期を「順番待ちの列」にする仕組み（3937〜3982行）
+## 4. サーバー同期を「順番待ちの列」にする仕組み（4036〜4070行付近）
 
 CardMakerのあちこちで登場してきた`queueSyncDeckToServer`と`waitForPendingSync`の正体がここで説明されています。
 
 ```js
 const deckSyncPromises = new Map();
+const deckSyncDirty = new Set(); // 未反映（反映中・失敗）のデッキid
 function queueSyncDeckToServer(deck) {
+  deckSyncDirty.add(deck.id);
   const prev = deckSyncPromises.get(deck.id) || Promise.resolve();
-  const next = prev.then(() => syncDeckToServer(deck)).catch(() => false);
+  const next = prev.then(() => syncDeckToServer(deck)).catch(() => false)
+    .then(ok => { if (ok && deckSyncPromises.get(deck.id) === next) deckSyncDirty.delete(deck.id); return ok; });
   deckSyncPromises.set(deck.id, next);
   return next;
 }
@@ -332,6 +335,7 @@ async function waitForPendingSync(deckId) {
   if (pending) { try { await pending; } catch(e) {} }
 }
 ```
+- `deckSyncDirty`（2026/11/08追加）は「サーバーにまだ反映できていないデッキ」のid一覧です。反映を予約した時点で入り、反映に成功すると外れます（失敗した間は入ったまま）。`fetchAndMergeDecks()`が、このデッキのカードを「サーバーより枚数が多い＝古いキャッシュ」と誤判定して空に戻してしまわないための目印として使われます（[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)参照）。`publishDeck`（公開して保存）に成功したときにも外されます。
 - `deckSyncPromises`は「デッキID → そのデッキに対する直近のサーバー同期処理」を覚えておく`Map`（キーと値の対応を管理する入れ物）です。
 - `queueSyncDeckToServer`が呼ばれるたびに、「前回の同期処理（`prev`）が終わったら、次の同期処理を始める」という形で**同期処理を1本の列に並べて直列につなげていきます**。`.then(() => ...)`は「前の処理が終わったらこれを実行する」という書き方です。
 - コメントに、なぜこの仕組みが必要かの理由が書かれています：カードを次々に追加・削除する場面（例：10問連続で作成）では、1回ごとの同期完了を律儀に待っていると操作のテンポが悪くなるので、待たずに次々進められるようにしたい。しかし、「作成済みリストから別のカードをタップして編集する」ときは、直前の追加分の同期がまだ完了していない状態で強制的にサーバーから読み込み直すと、その追加分がまだサーバーに存在しないまま古い内容で上書きされて消えてしまいます。

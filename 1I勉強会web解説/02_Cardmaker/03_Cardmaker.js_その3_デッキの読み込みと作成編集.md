@@ -4,18 +4,23 @@
 
 ---
 
-## 1. サーバーからデッキ一覧を取得する：`fetchAndMergeDecks()`（1528〜1597行）
+## 1. サーバーからデッキ一覧を取得する：`fetchAndMergeDecks()`（1760〜1842行）
 
 一覧画面に表示する「軽量なメタ情報だけ」（カード本体は含まない：名前・件数・科目・公開者など）をサーバーから取得し、この端末の`decks`配列に反映します。カード本体（問題文・解答・画像）は、実際にそのデッキを開くときに別途取得します（次節）。これにより、デッキ数や画像が増えても一覧の表示自体は軽いままになります。
 
 `fetched`を組み立てる`.map(s => {...})`の中で、サーバーから来た情報と、この端末に元々あった情報（`existing`）をどう組み合わせるかが細かく調整されています：
 
 ```js
-const cachedIsStale = existing && existing.cardsLoaded
+const hasUnsyncedLocal = !!existing && (
+  deckSyncDirty.has(existing.id)
+  || (existing.id === currentDeckId
+      && document.querySelector('.screen.active')?.id === 'screen-edit'));
+const cachedIsStale = existing && existing.cardsLoaded && !hasUnsyncedLocal
   && typeof s.count === 'number' && s.count < existing.cards.length;
 const keepLoadedCards = existing && existing.cardsLoaded && !cachedIsStale;
 ```
 - すでにカード本体を読み込み済みなら、それを引き継いで再取得を省略したいところですが、**サーバー側の最新枚数がこの端末のキャッシュより減っている場合は引き継がない**という条件が付いています。コメントによれば、これをやらないと「他の人がカードを減らした後、この端末が古い（多い）枚数をキャッシュとして持ち続けてしまい、後で説明する枚数不一致チェックが永遠に満たされず、そのデッキが二度と開けなくなる」という「詰み」状態を招くためです。
+- ただし**例外**があります（`hasUnsyncedLocal`、2026/11/08追加）。サーバーへまだ反映できていない手元の追加分があるデッキ（`deckSyncDirty`に入っているもの。CSV一括読み込みの直後など）と、今まさに編集画面で開いているデッキは、「サーバーの枚数が少ない＝古いキャッシュ」とは判定しません。これを怠ると、反映が終わる前に他の更新通知で一覧が再取得されたとき、追加したカードが空に戻され、そのまま「公開して保存」すると空の内容でサーバーを上書きして消えてしまうためです。`deckSyncDirty`の仕組みは[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の4節で説明します。
 
 `notYetPublished`（「作成中」かどうか）と`folderId`（フォルダ所属）についても、それぞれ「この端末に記録があればそれを優先し、無ければサーバー側の情報や、旧来の判定基準にフォールバックする」という、後方互換性を意識した組み立てになっています。
 
