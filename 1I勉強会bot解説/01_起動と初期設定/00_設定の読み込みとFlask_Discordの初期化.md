@@ -158,7 +158,7 @@ def notify_change(guild_id=None):
 @app.route("/events", methods=["GET"])
 def sse_events():
     guild_id = request.args.get("guild_id")
-    guild_id = int(guild_id) if guild_id else None
+    guild_id = int(guild_id) if guild_id and guild_id.isdigit() else None  # ★ "null"等の文字列は指定なし扱い（500防止）
 
     q = queue.Queue()
     with EVENT_SUBSCRIBERS_LOCK:

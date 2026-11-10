@@ -180,7 +180,7 @@ def get_card_set():
   CardMakerには「作成中」の未公開デッキという概念があり、これは既にファイルとして存在します。そのため、単純に「ファイルが既にあるかどうか（`is_update`）」だけで「更新」か「公開（新規）」かを判定すると、**初めて公開した瞬間なのに「更新されました」という誤った文言**になってしまいます。これを避けるため、フロント側が明示的に「これが初めての公開かどうか」を`first_publish`として伝えてきて、それを優先的に使います。
 
 ```python
-            deck_url = f"{CARDMAKER_URL}?deck={filename}"
+            deck_url = f"{CARDMAKER_URL}?{urlencode({'deck': filename})}"  # ★ 記号入りでも壊れないようエンコード
             embed = discord.Embed(
                 title=f"📇 単語カードが{action}されました",
                 description=(

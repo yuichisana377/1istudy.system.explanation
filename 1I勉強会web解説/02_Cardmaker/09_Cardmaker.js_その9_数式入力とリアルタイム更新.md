@@ -89,6 +89,10 @@ function setSimpleMathText(el, raw) {
 ```js
 const MATH_PAD_HTML = (function(){
   const supKeys = ['⁰','¹','²','³','⁴','⁵','⁶','⁷','⁸','⁹','⁺','⁻','⁽','⁾','ⁿ'];
+  // 下付きの英字（a b c x y z）。Unicodeに b c y z の下付き文字が無いため、簡易記法「_(b)」で挿入する
+  const subLetterKeys = ['a', 'b', 'c', 'x', 'y', 'z'].map(l => ({
+    ch: `_(${l})`, label: `<span class="math-sub-letter">${l}</span>`,
+  }));
   const subKeys = ['₀','₁','₂','₃','₄','₅','₆','₇','₈','₉','₊','₋','₍','₎'];
   const symKeys = ['±','∓','×','÷','≤','≥','≠','≈','∞','π','θ','°','∑','∫'];
   const keyBtn = c => `<button type="button" class="math-key" data-ch="${c}">${c}</button>`;
@@ -113,6 +117,7 @@ const MATH_PAD_HTML = (function(){
       <div class="math-row math-row-sub">
         <span class="math-row-label">下付き文字（添字など）</span>
         ${subKeys.map(keyBtn).join('')}
+        ${subLetterKeys.map(letterKeyBtn).join('')}
       </div>
       <div class="math-row math-row-sym">
         <span class="math-row-label">記号</span>
@@ -255,12 +260,15 @@ prefetchOtherPages();
 Discordに流れる通知のリンク（例：`Cardmaker.html?deck=set_xxxx.json`）から直接開かれた場合、該当のデッキが入っているフォルダまで自動で移動し、そのデッキをハイライト表示する機能です。
 
 ```js
-const targetFilename = params.get('deck');
+const targetFilename = readPendingDeckLink();   // ?deck= を読み、localStorageに15分だけ控える
 if (!targetFilename) return;
-history.replaceState(null, '', location.pathname + location.hash);
 const deck = decks.find(d => d.filename === targetFilename);
-if (!deck) return;
-openFolder(deck.folderId || null);
+if (!deck) return;                               // 見つからなければ控えを残して次回再挑戦
+if (deck.folderId && !folders.some(f => f.id === deck.folderId)) return;  // フォルダ一覧の取得待ち
+if (document.querySelector('.screen.active')?.id !== 'screen-list') return;
+localStorage.removeItem(DECK_LINK_KEY);          // 飛べると確定してから控えを消す
+currentFolderId = deck.folderId || null;
+renderDeckListUI();
 requestAnimationFrame(() => {
   const grid = document.getElementById('deck-grid');
   const el = grid && grid.querySelector(`[data-key="deck:${CSS.escape(targetFilename)}"]`);
@@ -271,7 +279,7 @@ requestAnimationFrame(() => {
   setTimeout(() => { el.style.boxShadow = ''; el.style.transform = ''; }, 2200);
 });
 ```
-- `history.replaceState`でURLから`?deck=...`を消しておくことで、あとでブックマークしたり再読み込みしたりしても、毎回同じ場所へ自動的に飛ばされ続けることを防いでいます。
+- 以前は読み込んだ瞬間にURLから`?deck=...`を消していましたが、その時点でデッキ一覧の取得が間に合っていない（または失敗した）と二度と飛べなくなっていました。今は`?deck=`をURLから消す代わりに`localStorage`へ15分だけ控え、**実際に飛べると確定してから**控えを消します。見つからない間は3秒ごと（と一覧更新のたび）に再挑戦するので、読み込みが遅くても、ログイン画面を経由してURLが失われても、あとから飛べます。
 - `CSS.escape(targetFilename)`：ファイル名にCSSセレクタとして特別な意味を持つ文字（`.`や`#`など）が含まれていても、`querySelector`が正しく動くように安全にエスケープする、ブラウザ標準の命令です。
 - 見つけたデッキの要素まで滑らかにスクロールし、青い枠と拡大効果で2.2秒間だけハイライトします。
 
