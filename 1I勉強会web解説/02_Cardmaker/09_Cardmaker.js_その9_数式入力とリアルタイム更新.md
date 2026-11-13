@@ -31,6 +31,9 @@ function findMatchingParen(s, openIdx) {
 `simpleMathToLatexRaw(s)`（4617〜4648行）と`simpleMathToLatex(raw)`（4653〜4689行）は、ほぼ同じロジックの2段構えです：
 - `√(...)`や`∛(...)`（ルート・立方根）を見つけたら、中身を`\sqrt{...}`に変換。
 - `(分子)/(分母)`という形を見つけたら、`\frac{分子}{分母}`に変換。
+- `→(a)`・`→(AB)`（ベクトル）を見つけたら、`\overrightarrow{...}`に変換。`\vec`ではなく`\overrightarrow`を使うのは、`AB`のように2文字以上でも中身の幅いっぱいに矢印が伸び、教科書と同じ見た目になるためです。`→(a_(1))`のような添字付きにも対応します。
+- `_(b)`（英字の下付き）を見つけたら、`_{b}`に変換。
+- ベクトルと下付きは、`matchVectorAt`／`matchSubscriptAt`という小さな判定関数で「中身が英数字（ベクトルは`'`と`_(1)`も可）だけか」を確かめてから変換します。`反応→(加熱)`や`snake_case(x)`のような普通の文章まで数式にしてしまわないための安全策です。
 - **中身（ルートの中・分数の分子/分母）も、もし数式が入っていれば再帰的に同じ変換をかける**（`simpleMathToLatexRaw`が自分自身をもう一度呼び出している部分）。これにより「ルートの中に分数がある」のような入れ子の数式も正しく変換できます。
 - 該当しない部分の文字はそのままコピーします（`out += s[i]`）。
 
@@ -105,10 +108,11 @@ const MATH_PAD_HTML = (function(){
       <div class="math-preview-label">プレビュー</div>
       <div class="math-preview"></div>
       <div class="math-row math-row-struct">
-        <span class="math-row-label">分数・ルート（教科書と同じ見た目で表示されます）</span>
+        <span class="math-row-label">分数・ルート・ベクトル（教科書と同じ見た目で表示されます）</span>
         <button type="button" class="math-key math-key-wide" data-action="frac">分数<span class="math-key-hint">(a)/(b)</span></button>
         <button type="button" class="math-key" data-action="sqrt">√</button>
         <button type="button" class="math-key" data-action="cbrt">∛</button>
+        <button type="button" class="math-key math-key-wide" data-action="vec">ベクトル<span class="math-key-hint">→(a)</span></button>
       </div>
       <div class="math-row math-row-sup">
         <span class="math-row-label">上付き文字（乗数など）</span>
@@ -123,7 +127,7 @@ const MATH_PAD_HTML = (function(){
         <span class="math-row-label">記号</span>
         ${symKeys.map(keyBtn).join('')}
       </div>
-      <div class="math-pad-tip">${Icons.html('hint', {size:16})} 分数・ルートは、数字や文字を選択してからボタンを押すとその部分が中に入ります。</div>
+      <div class="math-pad-tip">${Icons.html('hint', {size:16})} 分数・ルート・ベクトルは、数字や文字を選択してからボタンを押すとその部分が中に入ります。</div>
     </div>`;
 })();
 ```
@@ -221,6 +225,7 @@ function mathInsertFraction(el) {
 }
 ```
 - パレットのボタンを押したときに、実際に入力欄へ文字を挿入する3種類の関数です。すべて「選択範囲があればそこを対象にする、無ければカーソル位置に挿入する」という、テキストエディタの一般的な挙動を再現しています。`el.selectionStart`/`el.selectionEnd`で今選択されている範囲を取得し、その前後の文字列と挿入したい文字列をつなげて新しい`value`を組み立てます。
+- 「ベクトル」ボタンは√と同じ`mathInsertWrap`を使い、`→(`と`)`で囲みます。`AB`を選択してから押せば`→(AB)`になります。
 - `mathInsertFraction`だけ少し特殊で、選択していた文字列をそのまま分子にして`(選択部分)/(`という形にし、カーソルを分母の位置（選択が無ければ分子の位置）に移動させます。分数を作るときに「選択してからボタンを押すと、選択した内容がそのまま分子になる」という使い勝手を実現しています。
 
 ```js
@@ -235,6 +240,7 @@ document.addEventListener('click', function(e) {
     case 'frac': mathInsertFraction(target); break;
     case 'sqrt': mathInsertWrap(target, '√(', ')'); break;
     case 'cbrt': mathInsertWrap(target, '∛(', ')'); break;
+    case 'vec':  mathInsertWrap(target, '→(', ')'); break;
     default:     mathInsertChar(target, btn.dataset.ch || '');
   }
 });
