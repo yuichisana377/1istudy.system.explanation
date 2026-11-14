@@ -1479,7 +1479,7 @@ function startLiveUpdates(checkFn, opts) {
   opts = opts || {};
   var running = false, again = false, missed = false, lastRun = 0, runId = 0;
   function run() {
-    if (document.hidden) { missed = true; return; }
+    if (document.hidden && lastRun !== 0) { missed = true; return; }
     if (running && Date.now() - lastRun < 30000) { again = true; return; }
     running = true;
     lastRun = Date.now();
@@ -1505,7 +1505,7 @@ function startLiveUpdates(checkFn, opts) {
 ```
 - **SSEの合図が来たらすぐチェックする**（`es.addEventListener('message', run)`）。ここは今まで通りです。
 - **保険のポーリングは、SSEがつながっている間は60秒に1回、切れている間は10秒に1回**。`setInterval`自体は10秒ごとに動きますが、`es.readyState === 1`（接続中）のときは、前回のチェックから60秒たっていなければ何もしません。SSEが使えない・切れている環境では、今まで通り10秒ごとにチェックします。
-- **タブが見えていない間は取得しない**（`document.hidden`）。見えていない間に合図が来たら`missed`に覚えておき、見える状態に戻った瞬間（`visibilitychange`）に1回チェックします。
+- **タブが見えていない間は取得しない**（`document.hidden`）。見えていない間に合図が来たら`missed`に覚えておき、見える状態に戻った瞬間（`visibilitychange`）に1回チェックします。ただし最初の1回だけは、見えていなくても行います（`lastRun !== 0`の条件）。各チェック関数は「初回は比較せず、今の内容を基準として覚えるだけ」という作りなので、裏のタブで開かれたページが基準を取らないまま待っていると、見えるまでの間に起きた変更を「基準」として覚えてしまい、古い表示のまま気づけなくなるためです。
 - **チェックを重ねて走らせない**。チェックの実行中（`running`）に次の合図が来たら、`again`に印を付けるだけにして、終わってからもう1回だけ行います。クイズ中のように合図が連続する場面で、同じ取得が何本も並行するのを防ぎます。通信が固まって30秒たっても返ってこない場合は、見切って次のチェックを始めます（`runId`は、見切られた古い実行が後から状態を書き換えないための番号です）。
 - **SSE接続は1ページにつき1本**。`liveEventSource`は同じguild向けの接続を使い回します。全ページで読み込まれる`QuizRoomNotify.js`（クイズの部屋ができたことを知らせる通知）も同じ接続を使うので、以前は1ページにつき2本張っていた接続が1本になりました。
 - `var`と関数宣言だけで書いてあるのは、`Common.js`の決まり（各ページの`const`と名前がぶつからないようにする）に合わせたものです。`GUILD_ID`は各ページのJSが定義したものを、呼び出された時点で参照します。
