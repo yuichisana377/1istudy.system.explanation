@@ -138,7 +138,7 @@ def _quiz_room_snapshot(room, student_id):
 ## 3. 見分けにくい誤答の生成：`_pick_distractors`（4953〜4976行）
 
 ```python
-def _pick_distractors(correct: str, pool: list, k: int) -> list:
+def _pick_distractors(correct: str, pool: list, k: int, ranked: bool = False) -> list:
     """
     ★ 完全ランダムに選ぶと、他のカードの答えと文字数も内容もかけ離れた
       誤答ばかりになりがちで、見た目だけで消去法に正解できてしまっていた。
@@ -146,20 +146,24 @@ def _pick_distractors(correct: str, pool: list, k: int) -> list:
       その中からランダムに選ぶことで、きちんと覚えていないと迷うような
       4択にする。
     """
+    scored = pool if ranked else _distractor_shortlist(correct, pool, len(pool))
+    pool_size = max(k, min(len(scored), k * 2))
+    return random.sample(scored[:pool_size], k)
+
+
+def _distractor_shortlist(correct: str, pool: list, k: int) -> list:
     def _score(a):
         seq_ratio = difflib.SequenceMatcher(None, correct, a).ratio()
         longer = max(len(correct), len(a), 1)
         length_ratio = 1 - abs(len(correct) - len(a)) / longer
         return seq_ratio * 0.7 + length_ratio * 0.3
-
-    scored = sorted(pool, key=_score, reverse=True)
-    pool_size = max(k, min(len(scored), k * 2))
-    return random.sample(scored[:pool_size], k)
+    return sorted(pool, key=_score, reverse=True)[:k]
 ```
+- **2026/11/14〜：採点（`_score`）は`_distractor_shortlist`の1か所だけにあります。** 以前は全く同じ`_score`が`_pick_distractors`の中にも重複して書かれていました。今の`_pick_distractors`は、`_distractor_shortlist`に「全件を採点順に並べて」と頼み（`k`に`len(pool)`を渡す）、その上位から選ぶだけです。並び順も選ばれ方も以前と同じです。`ranked=True`は「`pool`は既に採点順に並んでいる」という意味で、採点を省きます（CardMakerのキャッシュ生成が使います。[../14_FlaskAPI_CardMaker/04_4択事前生成キャッシュ.md](../14_FlaskAPI_CardMaker/04_4択事前生成キャッシュ.md)参照）。
 - これはクイズの「面白さ・妥当性」に関わる、興味深いアルゴリズムです。単に不正解の選択肢をランダムに選ぶだけだと、コメントの通り「正解だけ極端に短い/長い」のような、内容を知らなくても見た目だけで消去法により正解できてしまう、質の低い4択になりがちでした。
 - `difflib.SequenceMatcher(None, correct, a).ratio()`… [../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md](../02_データ保存基盤/00_ファイル読み書きとSHA排他制御.md)などで登場した`difflib`ライブラリの、今度は**類似度を測る**機能です。2つの文字列がどれだけ似ているか（0〜1の比率）を計算します。
 - `_score`関数は、**文字列としての似ている度合い（70%の重み）**と**文字数の近さ（30%の重み）**を組み合わせたスコアです。コメントの追加説明にある通り、綴りの類似度だけだと「文字数が全然違うせいで一目で誤答と分かる」選択肢が紛れ込みやすかったため、文字数の近さも加味するよう改良されています。
-- `scored = sorted(pool, key=_score, reverse=True)`… 候補全体をスコアの高い順（正解に似ている順）に並べます。
+- `sorted(pool, key=_score, reverse=True)`… 候補全体をスコアの高い順（正解に似ている順）に並べます。
 - `pool_size = max(k, min(len(scored), k * 2))`… 上位何件から実際に選ぶかを決めます。`k=3`（3つの誤答が必要）なら、`pool_size`は最大6件です。コメントにある通り、以前は「上位9件からランダムに3件」だったものを「上位6件から3件」とタイトに絞ることで、「似ているが選ばれなかった紛らわしい候補が混ざりにくく」し、消去法が効きにくい4択にする改善が行われています。
 - `random.sample(scored[:pool_size], k)`… 上位の候補群から、最終的にランダムに`k`個を選びます。**完全にスコア順で機械的に選ぶのではなく、上位群からランダムに選ぶ**ことで、同じデッキから何度クイズを作っても、毎回少しずつ違う顔ぶれの誤答になるようにしています。
 
@@ -346,8 +350,17 @@ def _archive_room_if_needed(room):
     if room.get("source") != "manual" or room.get("archived"):
         return
     room["archived"] = True
-    _archive_manual_quiz(room["title"], room["questions"], room["host_id"], room["host_nickname"])
+    players = {pid: {"wrong_indices": list(p.get("wrong_indices") or [])} for pid, p in room["players"].items()}  # 写し
+    args = (room["guild_id"], room["title"], room["questions"], room["host_id"], room["host_nickname"], players)
+    def _run():
+        with _QUIZ_ARCHIVE_LOCK:
+            _archive_manual_quiz(*args)
+    Thread(target=_run, daemon=True).start()
 ```
+- **2026/11/14〜：保存は別スレッドで行います。** この関数は`QUIZ_ROOMS_LOCK`（全ルーム共通のロック）を握った状態で呼ばれます。以前はそのまま`_archive_manual_quiz`を呼んでいたため、デッキの書き込み・索引の更新・運用ログ・全プレイヤー分の「わからない」の書き込みが終わるまで、**他のルームも含めた全てのクイズの進行とAPIが待たされていました**（[03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)の`/quiz_answer`が「ロック内ではファイルI/Oをしない」と決めているのと食い違っていました）。今は、ロックの中では「保存済みの印を付ける」「必要なデータを写し取る」だけを行い、実際の保存は`Thread`に任せます。
+  - `players`は`room["players"]`そのものではなく、`wrong_indices`だけを写した辞書です。別スレッドが読んでいる最中に`/quiz_leave`で参加者が抜けても影響を受けないようにするためです。
+  - `_QUIZ_ARCHIVE_LOCK`は保存専用の別のロックです。2つのルームがほぼ同時に終わったとき、過去問フォルダの作成と索引の更新が同時に走ると片方が消えるおそれがあるので、保存どうしは1件ずつ順番に行います。`QUIZ_ROOMS_LOCK`とは別物なので、クイズの進行は止めません。
+  - クイズ終了の直後に一瞬だけ「過去問デッキがまだ無い」時間ができますが、保存が終わると索引の更新に伴う通知（SSE）が飛ぶので、CardMaker側の一覧は自動で追いつきます。
 - `room.get("source") != "manual"`… デッキから自動生成されたクイズ（`source == "deck"`）は、元々CardMaker上に存在するデッキそのものなので、改めてアーカイブする必要がありません。オリジナル問題（`source == "manual"`）の場合だけアーカイブします。
 
 ### 6.1 追記（2026/08/27）：オリジナル4択も、不正解を過去問デッキへ裏で「わからない」として記録
@@ -355,7 +368,7 @@ def _archive_room_if_needed(room):
 [03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)の`/quiz_answer`で追加した「デッキから自動作成の不正解を元デッキへ裏でわからない付ける」機能について、ユーザーから「デッキから自動生成でなくても過去問として残るんだからわからないつけて」と指摘があった。オリジナル4択（`source=="manual"`）には元デッキが無いため、`/quiz_answer`の時点ではまだ対象デッキが存在しない——**この過去問デッキ自体が生まれる瞬間（クイズ終了時のアーカイブ）が、唯一の記録タイミング**になる。
 
 - 各プレイヤーの`player`辞書に`"wrong_indices": []`を追加（新規参加者・途中参加者の両方の初期化箇所）。`/quiz_answer`が不正解と判定するたびに`player["wrong_indices"].append(room["current_q"])`する。
-- `_archive_manual_quiz`に`players`（`room["players"]`）という新しい引数（省略可、デフォルト`None`）を追加。`cards`（`questions`と同じ順序・同じインデックスで作られる、6節参照）を作り終えた直後に、`players`の各プレイヤーの`wrong_indices`を見て、該当インデックスの`cards[i]["id"]`を`_silently_mark_unsure(guild_id, pid, filename, cards[i]["id"])`（[03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)参照）へ渡す。
+- `_archive_manual_quiz`に`players`（`room["players"]`）という新しい引数（省略可、デフォルト`None`）を追加。`cards`（`questions`と同じ順序・同じインデックスで作られる、6節参照）を作り終えた直後に、`players`の各プレイヤーの`wrong_indices`を見て、該当インデックスの`cards[i]["id"]`を`_silently_mark_unsure(guild_id, pid, filename, cards[i]["id"])`（2026/11/14〜は、プレイヤーごとにカードidをリストにまとめて`_silently_mark_unsure(guild_id, pid, filename, ids)`と1回だけ呼びます。1問ごとに学習データを読み書きしていたのを、1人につき1回の保存にしました）（[03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)参照）へ渡す。
   - **`questions[i]`と`cards[i]`が同じインデックスで対応している**ことがこの実装の前提（`cards = [{...} for q in questions]`というリスト内包表記で、順序を変えずに1:1変換しているため成立する）。「問題ごとに正解番号（`current_q`）を覚えておき、あとで同じ番号の位置にあるカードを引く」という、`source_deck_filename`/`source_card_id`（デッキから自動作成の場合、01節参照）とは全く違うアプローチだが、目的は同じ。
   - デッキ作成（`put_card_file`）が失敗した場合はこのマーキング処理まで到達しない（`try`の外に出ない＝過去問デッキ自体が存在しないので、マークのしようがなく、それで正しい）。
 - ホストも`room["players"]`に含まれる1人のプレイヤーなので、ホスト自身が不正解だった問題も同じ仕組みで自動的にマークされる。

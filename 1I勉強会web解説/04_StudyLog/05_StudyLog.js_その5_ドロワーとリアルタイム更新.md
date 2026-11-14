@@ -77,17 +77,14 @@ async function refreshWatchedData() {
 ### 4.3 SSEとタイマー同期の統合（1813〜1832行）
 ```js
 function startRealtimeUpdates() {
-  try {
-    const es = new EventSource(`${API_BASE}events?guild_id=${GUILD_ID}`);
-    es.onmessage = () => {
-      checkForUpdates();
-      if (timerSyncInterval) syncTimerFromServer();
-    };
-  } catch (e) {}
+  startLiveUpdates(function () {
+    if (timerSyncInterval) syncTimerFromServer();
+    return checkForUpdates();
+  });
 }
 startRealtimeUpdates();
-setInterval(checkForUpdates, 10000);
 ```
+- **2026/11/14〜：SSE接続と保険のポーリングは、`Common.js`の`startLiveUpdates()`にまとめました。** 以前は各ページがそれぞれ`EventSource`を作り、さらに`setInterval(…, 10000)`で10秒ごとに全データを取り直していました。今は「SSEの合図で即チェック。保険のポーリングはSSE接続中なら60秒に1回、切れていれば10秒に1回。タブが見えていない間は取得しない」という動きです（[../01_index_予定管理.md](../01_index_予定管理.md)の`startLiveUpdates`の説明を参照）。このページは監視対象が5種類あり、1回のチェックで5本の通信が出るので、効果が一番大きいページです。
 - 通常のSSE通知に加えて、コメントに書かれている通り「勉強タイマーの同期（他端末での一時停止／再開、3時間ごとの自動休憩の検知）も同じSSE接続に相乗りさせる」という工夫がされています。`timerSyncInterval`が動いている（＝[04_StudyLog.js_その4_タイマー機能.md](04_StudyLog.js_その4_タイマー機能.md)の`startSyncPolling()`が既に呼ばれていて、タイマー画面が進行中の記録を表示している）ときだけ`syncTimerFromServer()`を呼ぶことで、「タイマーに関係あるときだけ同期する」という元々の条件を保ったまま、SSEによる即時反映の恩恵も受けられるようにしています。
 - これにより、何らかのSSE通知（予定の変更でも、他の人の勉強記録でも、種類を問わず）が届くたびに、ついでにタイマーの状態も確認しに行く、という設計になっています。厳密には「タイマーの変化」以外の通知でも余分にタイマーAPIを呼んでしまう可能性がありますが、実装をシンプルに保つための割り切りと考えられます。
 

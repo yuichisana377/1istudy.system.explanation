@@ -148,15 +148,12 @@ async function refreshWatchedData() {
 ### 4.3 SSEとフォールバックポーリング（1855〜1867行）
 ```js
 function startRealtimeUpdates() {
-  try {
-    const es = new EventSource(`${API_BASE}events?guild_id=${GUILD_ID}`);
-    es.onmessage = () => { checkForUpdates(); };
-  } catch (e) {}
+  startLiveUpdates(checkForUpdates);
 }
 startRealtimeUpdates();
-setInterval(checkForUpdates, 10000);
 ```
-- [../01_index_予定管理.md](../01_index_予定管理.md)・[../02_Cardmaker/*](../02_Cardmaker/00_HTML構造とページ全体像.md)で何度も登場したのと同じ、SSEでの即時反映＋10秒間隔のフォールバックポーリングという2段構えの仕組みです。
+- **2026/11/14〜：SSE接続と保険のポーリングは、`Common.js`の`startLiveUpdates()`にまとめました。** 以前は各ページがそれぞれ`EventSource`を作り、さらに`setInterval(…, 10000)`で10秒ごとに全データを取り直していました。今は「SSEの合図で即チェック。保険のポーリングはSSE接続中なら60秒に1回、切れていれば10秒に1回。タブが見えていない間は取得しない」という動きです。仕組みは[../01_index_予定管理.md](../01_index_予定管理.md)の`startLiveUpdates`の説明を参照してください。
+- [../01_index_予定管理.md](../01_index_予定管理.md)・[../02_Cardmaker/*](../02_Cardmaker/00_HTML構造とページ全体像.md)で何度も登場したのと同じ、SSEでの即時反映＋フォールバックポーリングという2段構えの仕組みです。
 
 ---
 

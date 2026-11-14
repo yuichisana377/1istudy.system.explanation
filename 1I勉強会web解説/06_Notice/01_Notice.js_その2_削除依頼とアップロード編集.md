@@ -319,7 +319,7 @@ async function checkNoticesUpdate() {
 ```
 - 他ページと同じSHA-256ハッシュ比較の仕組みですが、コメントに「編集中のフォームや開いているプレビューモーダルはそのまま触らない（一覧の再描画だけ行う）」と明記されている点が重要です。この関数は`renderNotices()`（一覧の再描画）だけを行い、詳細モーダルやアップロードモーダルの中身には一切触れません。もし誰かが編集モーダルを開いて文章を書いている最中に、裏でこの更新が走ってモーダルの中身まで書き換えてしまったら、入力中の内容が失われる事故になりかねないため、影響範囲を一覧表示だけに限定する、という慎重な設計です。
 
-`startRealtimeUpdates()`（729〜736行）とその後の`setInterval(checkNoticesUpdate, 10000)`（739行）は、他ページと同じSSE＋10秒間隔ポーリングの二段構成です。
+`startRealtimeUpdates()`（729〜736行）は、他ページと同じSSE＋保険のポーリングの二段構成です。2026/11/14からは中身が`startLiveUpdates(checkNoticesUpdate);`の1行になり、SSE接続と保険のポーリング（SSE接続中は60秒に1回、切れていれば10秒に1回、タブが見えていない間は停止）は`Common.js`側でまとめて行います（[../01_index_予定管理.md](../01_index_予定管理.md)の`startLiveUpdates`の説明を参照）。以前あった`setInterval(checkNoticesUpdate, 10000)`は無くなりました。
 
 ドロワー（`openDrawer`/`prefetchOtherPages`/`closeDrawer`とリンクのクリック処理・`pageshow`イベント、741〜797行）は、他ページと同じ構造です。
 

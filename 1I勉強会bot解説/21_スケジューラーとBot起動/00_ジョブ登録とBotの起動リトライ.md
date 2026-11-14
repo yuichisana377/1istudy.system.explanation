@@ -44,15 +44,16 @@ async def on_ready():
         scheduler.start()
         started = True
         print("Scheduler started!")
-        # ★ 追加（2026/08/21）：quiz_archiveフラグ導入に伴う既存データの一度きりの移行。
-        _migrate_legacy_quiz_archive_decks()
+        # ★ quiz_archiveフラグの移行（_migrate_legacy_quiz_archive_decks）は、他の移行と同じく
+        #   起動時（keep_alive()の前）へ移した。ここで呼ぶとDiscordの通信ループを止めてしまうため。
 ```
 - `on_ready`は、Discordとの接続が確立し、Botが実際に使える状態になったときに、discord.pyのライブラリから自動的に呼ばれるイベントハンドラです。
 - `global started, synced_once`… これらの変数は関数の外（モジュールの最上位）で定義されているため、関数の中でこれらの値を**書き換える**には`global`宣言が必要です（Pythonでは、関数内で変数に代入すると、デフォルトではその関数だけのローカル変数として扱われてしまうため、外側の変数を変更したい場合は明示的に`global`と宣言する必要があります）。
 - `bot.tree.sync()`… ここまで`@bot.tree.command(...)`で定義してきた全てのスラッシュコマンド（`/add`、`/list`など）の情報を、Discord側に登録（同期）する処理です。これを行って初めて、Discordのユーザーが実際に`/`と打ったときにコマンドの候補が表示されるようになります。
 - **`synced_once`フラグで1回限りに制限している理由**がコメントに書かれています。「再接続（`resume`失敗などで`on_ready`が複数回呼ばれるケース）のたびに`tree.sync()`を叩くと、それ自体がAPI呼び出しの積み重ねになりレート制限を誘発しやすくなる」。`on_ready`は、初回の起動時だけでなく、ネットワークの瞬断などで接続が一度切れて再接続した際にも、再び呼ばれる可能性があります。もし毎回律儀に`tree.sync()`を呼んでいると、頻繁な再接続が起きた場合にDiscordのAPIへの呼び出し回数が積み重なり、[../11_FlaskAPI_ユーザー認証](../11_FlaskAPI_ユーザー認証/00_ユーザー一覧と連携コード発行とOAuth開始.md)などで見た「レート制限」と同じ種類の問題（今度はBotとDiscordサーバーとの間で）を引き起こしかねません。実際にはコマンドの一覧は起動中に変わることはまず無いため、**プロセスが生きている間に1回だけ同期すれば十分**という判断です。
 - `scheduler.start()`も同様に`started`フラグで1回限りに制限されています。もし再接続のたびに`scheduler.start()`を呼んでしまうと、同じジョブが何重にも登録されて、例えば「毎日0時のバックアップ」が複数回同時に走ってしまう、といった不具合につながりかねません。
-- **`_migrate_legacy_quiz_archive_decks()`（2026/08/21追加）**… [../18_FlaskAPI_カードフォルダと並び順/00_フォルダのツリー構造と操作API.md](../18_FlaskAPI_カードフォルダと並び順/00_フォルダのツリー構造と操作API.md)で見た、既存のクイズ過去問デッキへ`quiz_archive`フラグを補う一度きりの移行処理です。`scheduler.start()`と全く同じ`if not started:`ブロックの中に置かれているため、**再接続のたびに何度も実行される心配がない**という恩恵をそのまま受けています（スケジューラーのジョブ重複登録を防ぐための仕組みに、たまたま「プロセス起動後1回だけ実行したい別の処理」も相乗りさせた形です）。
+- **`_migrate_legacy_quiz_archive_decks()`は、2026/11/14に`on_ready`の中から起動処理（4節、`keep_alive()`の直前）へ移しました。** この移行は`words/`の全デッキを読む処理なので、`on_ready`（Discordのイベントループの上）で行うと、その間Discordとの通信が止まります。また、Flaskがリクエストを受け付け始めた後に走るため、移行の途中で`save_cards`などが割り込む余地もありました。他の移行（`migrate_cardmaker_data_to_guild`など）は元から「Flaskが受け付けを始める前に済ませる」方針で起動処理に置かれており、それにそろえた形です。以下は移す前（2026/08/21〜2026/11/13）の説明です。
+- **（移す前の説明）`_migrate_legacy_quiz_archive_decks()`（2026/08/21追加）**… [../18_FlaskAPI_カードフォルダと並び順/00_フォルダのツリー構造と操作API.md](../18_FlaskAPI_カードフォルダと並び順/00_フォルダのツリー構造と操作API.md)で見た、既存のクイズ過去問デッキへ`quiz_archive`フラグを補う一度きりの移行処理です。`scheduler.start()`と全く同じ`if not started:`ブロックの中に置かれているため、**再接続のたびに何度も実行される心配がない**という恩恵をそのまま受けています（スケジューラーのジョブ重複登録を防ぐための仕組みに、たまたま「プロセス起動後1回だけ実行したい別の処理」も相乗りさせた形です）。
 
 ## 3. 切断イベント（6996〜6998行）
 
@@ -66,13 +67,18 @@ async def on_disconnect():
 ## 4. 全体の起動処理（7000〜7004行）
 
 ```python
+migrate_cardmaker_data_to_guild(LEGACY_GUILD_ID)
+migrate_notices_data_to_guild(LEGACY_GUILD_ID)
+migrate_system_log_to_guild(LEGACY_GUILD_ID)
+_migrate_legacy_quiz_archive_decks()  # ★ guild_idを補う移行（上）の後で実行すること
 keep_alive()
 start_quiz_scheduler()
 
 print(f"[INFO] TOKEN set: {bool(TOKEN)}, length: {len(TOKEN) if TOKEN else 0}")
 print(f"[INFO] Starting bot.run()...")
 ```
-- ここで、[../01_起動と初期設定/00_設定の読み込みとFlask_Discordの初期化.md](../01_起動と初期設定/00_設定の読み込みとFlask_Discordの初期化.md)の`keep_alive()`（Flaskサーバーを別スレッドで起動）と、[../15_FlaskAPI_クイズ/00_クイズルームの設計とヘルパー関数.md](../15_FlaskAPI_クイズ/00_クイズルームの設計とヘルパー関数.md)の`start_quiz_scheduler()`（クイズの自動進行を監視する専用スレッドを起動）が、実際に呼び出されます。これで、**Flask（Web API）・Discord Bot・クイズ監視スレッドという3つの独立した処理の流れ**が、全てこの1つのプロセスの中で動き出す準備が整います。
+- 最初の4行は、古い形式のデータを今の形式へ直す移行処理です。どれも「既に移行済みなら何もしない」作りなので、起動のたびに呼んで構いません。**`keep_alive()`（Flaskの起動）より前に置く**のが大事な点で、こうするとWebからのリクエストが来る前に移行が必ず終わっています。4行目の`_migrate_legacy_quiz_archive_decks()`（2026/11/14に`on_ready`から移動）は、デッキの`guild_id`を見て対象を絞るので、`guild_id`を補う1行目より後でなければなりません。
+- 続いて、[../01_起動と初期設定/00_設定の読み込みとFlask_Discordの初期化.md](../01_起動と初期設定/00_設定の読み込みとFlask_Discordの初期化.md)の`keep_alive()`（Flaskサーバーを別スレッドで起動）と、[../15_FlaskAPI_クイズ/00_クイズルームの設計とヘルパー関数.md](../15_FlaskAPI_クイズ/00_クイズルームの設計とヘルパー関数.md)の`start_quiz_scheduler()`（クイズの自動進行を監視する専用スレッドを起動）が、実際に呼び出されます。これで、**Flask（Web API）・Discord Bot・クイズ監視スレッドという3つの独立した処理の流れ**が、全てこの1つのプロセスの中で動き出す準備が整います。
 - `print(f"[INFO] TOKEN set: {bool(TOKEN)}, length: {len(TOKEN) if TOKEN else 0}")`… トークンの**中身**は絶対にログに出しませんが、「設定されているかどうか」と「その文字数」だけは出力しています。これはデバッグ用の便利な情報（トークンが正しく環境変数から読み込めているかを確認できる）でありながら、トークンの中身自体を漏らさない、バランスの取れたログ出力です。
 
 ## 5. レート制限を考慮した再接続ループ：`run_bot_forever`（7020〜7063行）

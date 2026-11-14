@@ -296,13 +296,13 @@ requestAnimationFrame(() => {
 ### 7.1 SSEでの即時反映（4925〜4947行）
 ```js
 function startRealtimeUpdates() {
-  try {
-    const es = new EventSource(`${API_BASE}events?guild_id=${GUILD_ID}`);
-    es.onmessage = () => { checkCardsUpdate(); checkFoldersUpdate(); checkOrderUpdate(); };
-  } catch (e) {}
+  startLiveUpdates(function () {
+    return Promise.all([checkCardsUpdate(), checkFoldersUpdate(), checkOrderUpdate()]);
+  }, { refreshOnVisible: false });
 }
 startRealtimeUpdates();
 ```
+- **2026/11/14〜：SSE接続と保険のポーリングは、`Common.js`の`startLiveUpdates()`にまとめました。** 以前は各ページがそれぞれ`EventSource`を作り、さらに`setInterval(…, 10000)`で10秒ごとに全データを取り直していました。CardMakerは3つのチェックがそれぞれ10秒ごとの`setInterval`を持っていました。今は3つをまとめて1回の実行として`startLiveUpdates`に渡しています（SSEの合図で即チェック。保険のポーリングはSSE接続中なら60秒に1回、切れていれば10秒に1回。タブが見えていない間は取得しない。仕組みは[01_index_予定管理.md](../01_index_予定管理.md)の説明を参照）。`refreshOnVisible: false`は「見える状態に戻ったときのチェックは行わない」という指定です。CardMakerには、戻ってきた瞬間に全データを取り直す`forceRefreshOnReturn()`（7.3節）が元からあるので、二重に取りに行かないようにしています。学習データの15秒ごとのチェック（`checkStudyDataUpdate`）も、タブが見えていない間は何もしないようにしました。
 - [01_index_予定管理.md](../01_index_予定管理.md)の`Plan.js`で説明したSSE（Server-Sent Events）と同じ仕組みです。サーバーから「何か変わった」という通知が届くたびに、カード・フォルダ・並び順の3種類を**まとめて**チェックし直します。コメントによれば、サーバー側は「何が変わったか」の詳細までは教えてくれないため、念のため3つとも確認しに行きますが、実際に変わっていないものはこのあと説明するハッシュ比較で自然にスキップされるので、無駄にはなりません。
 
 ### 7.2 ハッシュ比較による変更検知（4949〜5000行、5040〜5095行）
@@ -350,7 +350,7 @@ async function checkCardsUpdate() {
 ```
 - 変更を検知したら、まずデータだけはバックグラウンドで`decks`／`localStorage`に反映します。ただし、**画面の再描画は一覧画面（`screen-list`）を見ているときだけ**行います。コメントには「編集中／プレイ中の画面はそのままにして、リロードもしない。データは反映されているので、次に一覧へ戻ったときには最新の状態になっている」とあります。今まさにカードを編集している最中に、裏で受け取った他人の更新で画面が突然作り直されてしまうと、入力中の内容が失われかねないため、このような使い分けになっています。
 
-各チェック関数のあとには、SSEが機能しなかった場合の保険として`setInterval(..., 10000)`（10秒ごと）のポーリングも併設されています。
+各チェック関数のあとには、SSEが機能しなかった場合の保険として`setInterval(..., 10000)`（10秒ごと）のポーリングも併設されています。（2026/11/14追記：この個別の`setInterval`は無くなりました。保険のポーリングは7.1節の`startLiveUpdates()`がまとめて行い、SSE接続中は60秒に1回、切れていれば10秒に1回です。）
 
 ### 7.3 ページに戻ってきたときの強制リフレッシュ（5002〜5039行）
 ```js

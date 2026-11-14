@@ -56,37 +56,39 @@ def local_get(filename):
 ## 3. 書き込み：`_local_write_once`と`local_put`（292〜333行）
 
 ```python
-def _local_write_once(filename, content_obj, expected_sha=None):
+def _local_write_once(filename, content_obj, expected_sha=None, cas=False):
     path = _data_path(filename)
     dirname = os.path.dirname(path)
     if dirname:
         os.makedirs(dirname, exist_ok=True)
-
-    current_sha = None
-    if os.path.isfile(path):
-        with open(path, "rb") as f:
-            current_sha = _file_sha(f.read())
-
-    if expected_sha is not None and current_sha is not None and expected_sha != current_sha:
-        return False, current_sha
 
     encoded = json.dumps(content_obj, ensure_ascii=False, indent=2).encode("utf-8")
     tmp_path = f"{path}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
     try:
         with open(tmp_path, "wb") as f:
             f.write(encoded)
-        os.replace(tmp_path, path)
+        with _FILE_WRITE_LOCK:
+            if (cas or expected_sha is not None) and os.path.isfile(path):
+                with open(path, "rb") as f:
+                    current_sha = _file_sha(f.read())
+                if expected_sha != current_sha:
+                    return False, current_sha
+            os.replace(tmp_path, path)
     finally:
         try:
             os.remove(tmp_path)
         except OSError:
             pass
     return True, _file_sha(encoded)
+
+_FILE_WRITE_LOCK = Lock()  # 全ファイル共通。握るのは「照合＋差し替え」の一瞬だけ
 ```
-- 1回分の書き込み処理です。関数名の先頭に`_`が付いているのは、内部専用（このあとの`local_put`からしか呼ばれない）だという印です。
+- 1回分の書き込み処理です。関数名の先頭に`_`が付いているのは、内部専用（このあとの`local_put`／`local_put_cas`からしか呼ばれない）だという印です。
 - `os.makedirs(dirname, exist_ok=True)`… 保存先のフォルダ（例えば`words/`のようなサブフォルダ）が無ければ自動的に作ります。`exist_ok=True`は「既にあってもエラーにしない」設定です。
-- **排他チェックの核心部分**：`expected_sha`（呼び出し側が「自分が読み込んだときのハッシュ値」として渡してきた値）と、`current_sha`（今まさにディスクにあるファイルの実際のハッシュ値）を比較します。両方が存在していて、かつ値が食い違っていれば、「自分が読んでから今までの間に、誰か他の人が先に保存していた」と判断し、**書き込まずに`False`（失敗）を返します**。これがGitHubの409エラー相当の仕組みです。
-- 一致していれば（または`expected_sha`が指定されていなければ＝チェック不要）、実際に書き込みます。
+- **排他チェックの核心部分**：`expected_sha`（呼び出し側が「自分が読み込んだときのハッシュ値」として渡してきた値）と、`current_sha`（今まさにディスクにあるファイルの実際のハッシュ値）を比較します。食い違っていれば、「自分が読んでから今までの間に、誰か他の人が先に保存していた」と判断し、**書き込まずに`False`（失敗）を返します**。これがGitHubの409エラー相当の仕組みです。
+- 一致していれば（または照合が不要な呼び出しなら）、実際に書き込みます。
+- **照合と差し替えを`_FILE_WRITE_LOCK`の中で行う（2026/11/14〜）**：照合（今のshaを読んで比べる）と差し替え（`os.replace`）の間に他のスレッドが割り込めないよう、この2つを1つのロックで囲んでいます。時間のかかる処理（JSON化・一時ファイルへの書き込み）はロックの外で先に済ませてあるので、ロックを握るのは一瞬です。詳しくは下の「追記（2026/11/14）」を参照してください。
+- `cas=True`は`local_put_cas`専用の指定で、「読んだときはファイルが無かった（`expected_sha`が`None`）のに、今はある」場合も競合として扱います。
 - `json.dumps(content_obj, ensure_ascii=False, indent=2)`… Pythonのデータを、整形されたJSON文字列に変換します。`ensure_ascii=False`は「日本語をそのまま日本語の文字として保存する」設定（付けないと`あ`のような数値エスケープだらけになり、ファイルを直接開いたときに人間が読めなくなります）。`indent=2`はインデント幅2で整形し、テキストエディタで開いたときに読みやすくするためです。
 - **一時ファイルに書いてから`os.replace`ですり替える**、という書き方（`tmp_path`に書き込んでから本来のパスに置き換える）に注目してください。これは「アトミック（不可分）な書き込み」と呼ばれるテクニックです。もし直接本来のファイルに書き込んでいる途中でサーバーがクラッシュしたら、ファイルの中身が中途半端に壊れてしまいます。一時ファイルへの書き込みが終わった後に`os.replace`で名前を入れ替えるやり方なら、置き換え自体は一瞬で完了するため、「完全に新しい内容」か「完全に元の内容のまま」のどちらかにしかならず、中途半端に壊れた状態になることがありません。
 
@@ -111,24 +113,19 @@ def _local_write_once(filename, content_obj, expected_sha=None):
 
 ```python
 def local_put(filename, content_obj, sha=None):
-    ok, info = _local_write_once(filename, content_obj, sha)
+    ok, info = _local_write_once(filename, content_obj, None)
     if ok:
         return {"content": {"sha": info}}
-
-    ok2, info2 = _local_write_once(filename, content_obj, None)
-    if ok2:
-        return {"content": {"sha": info2}}
-
-    raise DataWriteError(f"ローカル保存に失敗しました（再試行後も失敗）: {filename}")
+    raise DataWriteError(f"ローカル保存に失敗しました: {filename}")
 ```
 - こちらが実際に外部（各機能のコード）から呼ばれる、書き込みの窓口です。
-- まず`sha`（読み込んだときのハッシュ値）付きで書き込みを試みます。
-- もし食い違いで失敗した場合（＝誰かが先に保存していた場合）、**チェック無し（`None`）で強制的にもう1回だけ書き込みを試みます**。つまり「他人の変更を確認せず、無条件で自分の変更を上書きする」形での1回だけの自動リトライです。これは完璧な解決策ではなく、理論上は「他人の変更を意図せず消してしまう」可能性がまだ残っていますが、11人規模の小さな運用で、かつ同じファイルへの同時書き込みが起きる頻度自体が低いという前提のもとで、シンプルさを優先した現実的な妥協です（本格的な対策をするなら、差分をマージする、あるいは何度も読み直して再試行する、といった複雑な仕組みが必要になります）。
-- それでも失敗する場合（ディスクの権限エラーなど、ハッシュ値の食い違い以外の根本的な問題）は、`DataWriteError`を投げて呼び出し側にエラーとして伝えます。以前のバージョンでは失敗を無視していたそうですが、今は例外を投げることで「保存に失敗しました」とユーザーに正しく伝えられるようになっています。
+- **`sha`は受け取るだけで、照合には使いません（常に上書きします）**。2026/11/14より前は「まず`sha`付きで書き込みを試み、食い違っていたらチェック無しで1回だけ強制的に書き直す」という2段構えでした。しかしこの書き方だと、shaが一致していても食い違っていても結果は必ず「上書き」になります。つまり照合には意味が無く、照合のためにファイル全体を読み直す手間だけがかかっていました。そこで照合ごと省き、1回書くだけにしました（引数の`sha`は、呼び出し側を書き換えずに済むよう残してあります）。
+- 「他人の変更を確認せず、自分の内容で上書きする」という性質は以前と同じです。理論上は「他人の変更を意図せず消してしまう」可能性が残りますが、11人規模の小さな運用で、同じファイルへの同時書き込みが起きる頻度自体が低いという前提のもとで、シンプルさを優先した妥協です。競合をきちんと検知したい箇所は、下で説明する`local_put_cas`を使います。
+- 失敗する場合（ディスクの権限エラーなど）は例外が呼び出し側に伝わります。以前のバージョンでは失敗を無視していたそうですが、今は「保存に失敗しました」とユーザーに正しく伝えられるようになっています。
 
 ### 追記（2026/08/26）：`local_put`の「1回だけ強制上書き」が、読み直しリトライループを無効化していた
 
-上の説明（126行目）にある「他人の変更を意図せず消してしまう可能性がまだ残っている」というのは元々分かった上での妥協だったが、コードレビューで、この妥協の影響範囲がもっと深刻だったことが判明した。
+（この追記は2026/08/26時点の話です。当時の`local_put`は「sha付きで試す→食い違ったら無条件で1回だけ強制上書き」という作りでした。）上の説明にある「他人の変更を意図せず消してしまう可能性がまだ残っている」というのは元々分かった上での妥協だったが、コードレビューで、この妥協の影響範囲がもっと深刻だったことが判明した。
 
 CardMakerの学習データ（わからないマーク・続きから進捗等、`_study_data_filename`関連）を扱う`update_student_study_data`や、クイズ過去問のランキングを扱う`_update_quiz_leaderboard`は、こういうコードになっていた：
 
@@ -154,7 +151,7 @@ def update_student_study_data(guild_id, student_id, mutate_fn, max_attempts=4):
 
 ```python
 def local_put_cas(filename, content_obj, sha=None):
-    ok, info = _local_write_once(filename, content_obj, sha)
+    ok, info = _local_write_once(filename, content_obj, sha, cas=True)
     if ok:
         return {"content": {"sha": info}}
     raise DataWriteError(f"sha競合により保存できませんでした（呼び出し元で読み直して再試行してください）: {filename}")
@@ -165,6 +162,22 @@ def local_put_cas(filename, content_obj, sha=None):
 - **`local_put`自体は変更していない**：単発で「多少のlost updateは許容し、シンプルさを優先する」箇所（例：`save_cards`でのデッキ本体保存。同時編集の自動マージは別の難しい問題なので、今回のスコープ外）はそのまま`local_put`を使い続けてよい。「read-modify-writeのリトライループを書いているかどうか」が使い分けの基準：リトライループを書くなら`local_put_cas`、書かないなら（＝競合時は単に最後の書き込みが勝つ想定でよいなら）`local_put`。
 
 **教訓**：楽観的並行性制御（sha比較によるCAS）を実装するときは、「競合を検知する層」と「検知したら読み直して再試行する層」を厳密に分離すること。片方が「親切心」で競合を自動的に握りつぶしてしまうと、もう片方がいくら丁寧にリトライループを書いても、実際には一度も動かない“死んだコード”になってしまう。今回のように、レビュー等で読み比べない限り気づきにくい。
+
+### 追記（2026/11/14）：無駄な読み直しの削除と、照合を原子的にする修正
+
+処理の順番と効率を見直した際に、書き込みまわりで次の3点を直しました。
+
+1. **照合が要らない書き込みでも、毎回ファイル全体を読んでハッシュを計算していた**
+   以前の`_local_write_once`は、関数の最初で必ず「今のファイルを全部読む→ハッシュを計算する」をしていました。`expected_sha`が無い（照合しない）呼び出しでは、その結果を一度も使いません。画像（base64）入りのカードデッキのように大きなファイルでは、保存のたびに丸ごと1回余計に読んでいたことになります。照合が必要なときだけ読むようにしました。
+2. **`local_put`の照合には意味が無かった**
+   上の`local_put`の説明の通りです。一致でも不一致でも必ず上書きになるので、照合ごと省きました。動作は変わっていません。
+3. **照合と差し替えの間に、他のスレッドが割り込めた**
+   以前は「今のshaを読む→比べる→書く」の間にロックがありませんでした。2つのスレッドがほぼ同時に来ると、両方が「shaは一致している」と判断してから順に書き込むことができ、先に書いた方の変更が消えます。`local_put_cas`を使っていても起こりえました。照合と`os.replace`を`_FILE_WRITE_LOCK`で囲み、この2つの間に割り込めないようにしました。
+   あわせて、「読んだときはファイルが無かった（shaが`None`）」場合の抜けも塞ぎました。以前は`expected_sha`が`None`だと照合そのものを飛ばしていたため、まだファイルが無い状態から2つのリクエストが同時に最初の保存をすると、片方が消えていました。`local_put_cas`からは`cas=True`を渡し、「読んだときは無かったのに今はある」も競合として扱います。
+
+確認方法：8スレッドが同じ学習データファイルへ25回ずつ、同時に`update_student_study_data`で書き込むテストを行いました。修正前は200件中193件しか残らず（最初の同時書き込みで7件が消える）、修正後は200件すべてが残ります。
+
+**教訓**：「確認してから書く」処理は、確認と書き込みの間に他の処理が割り込めないようにして初めて意味を持ちます。また、結果が変わらない確認（今回の`local_put`の照合）は、安全そうに見えるだけで手間しか増やしません。
 
 ## 4. 非同期版：`async_local_get`/`async_local_put`（335〜341行）
 

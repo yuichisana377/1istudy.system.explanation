@@ -1457,14 +1457,59 @@ async function checkScheduleUpdate() {
 
 ```js
 function startRealtimeUpdates() {
-  try {
-    const es = new EventSource(`${API_BASE}events?guild_id=${GUILD_ID}`);
-    es.onmessage = () => { checkScheduleUpdate(); };
-  } catch (e) {}
+  startLiveUpdates(checkScheduleUpdate);
 }
 startRealtimeUpdates();
-setInterval(checkScheduleUpdate, 10000);
 ```
+- **2026/11/14〜：SSE接続と保険のポーリングは、`Common.js`の`startLiveUpdates()`にまとめました。** 以前は各ページがそれぞれ`EventSource`を作り、さらに`setInterval(…, 10000)`で10秒ごとに全データを取り直していました。SSEが正常につながっていれば変更は即座に届くので、10秒ごとの取り直しはほぼ全部が無駄な通信でした（タブを開きっぱなしにするだけで1日に数千〜数万回）。全ページ共通の関数にまとめ、動きを次のように変えています。
+
+```js
+// Common.js
+var __liveEs = {};
+function liveEventSource(guildId) {
+  var key = String(guildId);
+  if (!__liveEs[key]) {
+    try { __liveEs[key] = new EventSource('/api/events?guild_id=' + encodeURIComponent(key)); }
+    catch (e) { return null; }
+  }
+  return __liveEs[key];
+}
+
+function startLiveUpdates(checkFn, opts) {
+  opts = opts || {};
+  var running = false, again = false, missed = false, lastRun = 0, runId = 0;
+  function run() {
+    if (document.hidden) { missed = true; return; }
+    if (running && Date.now() - lastRun < 30000) { again = true; return; }
+    running = true;
+    lastRun = Date.now();
+    var id = ++runId;
+    Promise.resolve().then(checkFn).catch(function () {}).then(function () {
+      if (id !== runId) return;
+      running = false;
+      if (again) { again = false; run(); }
+    });
+  }
+  var es = liveEventSource(GUILD_ID);
+  if (es) es.addEventListener('message', run);
+  setInterval(function () {
+    var sseOpen = !!es && es.readyState === 1;
+    if (!sseOpen || Date.now() - lastRun >= 60000) run();
+  }, 10000);
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) return;
+    if (opts.refreshOnVisible !== false && (missed || Date.now() - lastRun >= 10000)) run();
+    missed = false;
+  });
+}
+```
+- **SSEの合図が来たらすぐチェックする**（`es.addEventListener('message', run)`）。ここは今まで通りです。
+- **保険のポーリングは、SSEがつながっている間は60秒に1回、切れている間は10秒に1回**。`setInterval`自体は10秒ごとに動きますが、`es.readyState === 1`（接続中）のときは、前回のチェックから60秒たっていなければ何もしません。SSEが使えない・切れている環境では、今まで通り10秒ごとにチェックします。
+- **タブが見えていない間は取得しない**（`document.hidden`）。見えていない間に合図が来たら`missed`に覚えておき、見える状態に戻った瞬間（`visibilitychange`）に1回チェックします。
+- **チェックを重ねて走らせない**。チェックの実行中（`running`）に次の合図が来たら、`again`に印を付けるだけにして、終わってからもう1回だけ行います。クイズ中のように合図が連続する場面で、同じ取得が何本も並行するのを防ぎます。通信が固まって30秒たっても返ってこない場合は、見切って次のチェックを始めます（`runId`は、見切られた古い実行が後から状態を書き換えないための番号です）。
+- **SSE接続は1ページにつき1本**。`liveEventSource`は同じguild向けの接続を使い回します。全ページで読み込まれる`QuizRoomNotify.js`（クイズの部屋ができたことを知らせる通知）も同じ接続を使うので、以前は1ページにつき2本張っていた接続が1本になりました。
+- `var`と関数宣言だけで書いてあるのは、`Common.js`の決まり（各ページの`const`と名前がぶつからないようにする）に合わせたものです。`GUILD_ID`は各ページのJSが定義したものを、呼び出された時点で参照します。
+- 以下の2項目は、まとめる前（〜2026/11/13）の説明です。
 - `EventSource`という仕組みで、サーバーからの「何か変わったよ」という通知を待ち受けます。通知が来るたびに（内容の中身は見ずに）先ほどの`checkScheduleUpdate()`を呼び、実際に変わっていたかどうかを確認しに行きます。
 - もしこの通知の仕組み自体が使えない環境だった場合に備えて、`setInterval(処理, 10000)`＝「10秒ごとに繰り返しこの処理を実行する」という命令で、定期的にチェックする仕組みも並行して動かしています（通知が正常に機能していても、こちらは保険として動き続けます）。
 

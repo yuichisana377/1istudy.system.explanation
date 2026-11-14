@@ -229,11 +229,12 @@ def quiz_answer():
         mark_unsure_target = None
         if not correct and q.get("source_deck_filename") and q.get("source_card_id"):
             mark_unsure_target = (q["source_deck_filename"], q["source_card_id"])
+    notify_change(guild_id)
     if mark_unsure_target:
         _silently_mark_unsure(guild_id, student_id, *mark_unsure_target)
-    notify_change(guild_id)
     return jsonify({"ok": True})
 ```
+- **2026/11/14〜：`notify_change`を「わからない」の書き込みより先に呼びます。** 以前は逆の順番でした。最後の1人が回答して正解発表へ切り替わった場合でも、学習データの読み書きが終わるまで他の端末への合図が遅れていました。`notify_change`は合図をキューに入れるだけで一瞬で終わるので、先に済ませます。
 - `if room["state"] != "question":`… 出題中（`"question"`）以外の状態での回答は受け付けません。
 - **★ 追加：見学中ガード**。途中参加でこの問題にはまだ混ざれない（`active_from_q`が今の`current_q`より大きい）人からの回答は`"spectating"`エラーで拒否します。フロント側はそもそも見学中の人には選択肢のボタン自体を出さないため、通常はここに到達しませんが、APIを直接叩かれた場合の保険として二重にガードしています。
 - `if player["cur_answer"] is not None:`… **既に回答済みの場合、二重に回答を送れないようにするガード**です。これにより、同じ問題に対して1人が複数回答を送りつけて得点を不正に稼ぐことはできません。
@@ -243,7 +244,7 @@ def quiz_answer():
 - **★ 追加（同日・不具合修正）：`player["cur_points"]`**。Web側の正解発表フィードバック（[../../1I勉強会web解説/05_Quiz/02_Quiz.js_その2_対戦の進行とリアルタイム同期.md](../../1I勉強会web解説/05_Quiz/02_Quiz.js_その2_対戦の進行とリアルタイム同期.md)）は、以前「+10点」「+12点」という固定文言を出していたため、ボーナス問題で実際は+20点/+24点なのに表示だけ古いままという不一致が起きていた（「ちゃんと2倍になってるんだけど、表示が+12になってしまっている」との報告）。`points`を確定した直後に`player["cur_points"] = points`として控えておき、`_quiz_room_snapshot`のreveal中スナップショットで`your_points`としてクライアントへそのまま渡すことで、表示側が倍率計算を再現する必要が無いようにした（サーバー側の実際の計算結果を1箇所に集約し、表示はそれをそのまま出すだけにする、という設計）。`cur_answer`/`cur_correct`と同じ3箇所（player初期化2箇所・reveal→次の問題への遷移時のリセット）で一緒にリセットする。
 - `_quiz_autoadvance_locked(room, now)`… コメントの通り、この回答によって「全員が回答し終わった」場合、次のポーリングを待たずに、その場で正解発表（`reveal`）へ進めます。これも「体感の速さ」のための工夫で、[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)で見た`_quiz_scheduler_loop`（0.15秒ごとの自動チェック）と合わせて、**あらゆる場面でできるだけ素早く状態を進行させる**という一貫した設計方針が表れています。
 - **★ 追加（2026/08/27）：不正解を元デッキへ裏で「わからない」として記録**。「デッキから自動作成」（`source=="deck"`）のクイズは、問題を組み立てた時点（`_build_deck_questions`）で元カードの`(deck_filename, card_id)`を`q`に控えており（Web側には一切送らない、`question_payload`にも含めない）、不正解なら`mark_unsure_target`にその参照を控えておきます。ファイルI/O（学習データの読み書き）はルーム（`QUIZ_ROOMS_LOCK`）を持ったまま行うと他のプレイヤーの操作を待たせてしまうため、**ロックを抜けてから**`_silently_mark_unsure()`を呼びます。ホストが手入力した「オリジナル4択」（`source=="manual"`）はそもそも元カードが存在しないため対象外です。
-- `_silently_mark_unsure(guild_id, student_id, deck_filename, card_id)`（新設）は、`/save_unsure`（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)近辺ではなくCardMaker側の解説参照）と同じ`update_student_study_data`（読み込み→書き換え→保存を、競合時は最新を読み直して再試行する安全な更新処理）を使い、対象デッキの`unsure`配列に`card_id`が無ければ追加するだけです。`deck_filename`/`card_id`は、CardMaker側の`studyDataDeckKey()`（公開デッキは`filename`そのもの）・`cardKey()`（`id`優先）と同じキー形式になるよう揃えてあるため、次にCardMakerでそのデッキを開くと、何も操作していないのに該当カードが「わからない」として表示されます（Quiz.js側の画面には何の変化も出ません）。失敗してもクイズの進行自体は止めないベストエフォートです。
+- `_silently_mark_unsure(guild_id, student_id, deck_filename, card_id)`（新設）は、`/save_unsure`（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)近辺ではなくCardMaker側の解説参照）と同じ`update_student_study_data`（読み込み→書き換え→保存を、競合時は最新を読み直して再試行する安全な更新処理）を使い、対象デッキの`unsure`配列に`card_id`が無ければ追加（2026/11/14〜は、`card_id`にカードidのリストを渡して複数まとめて追加することもできます。クイズ終了時の過去問保存が使います）するだけです。`deck_filename`/`card_id`は、CardMaker側の`studyDataDeckKey()`（公開デッキは`filename`そのもの）・`cardKey()`（`id`優先）と同じキー形式になるよう揃えてあるため、次にCardMakerでそのデッキを開くと、何も操作していないのに該当カードが「わからない」として表示されます（Quiz.js側の画面には何の変化も出ません）。失敗してもクイズの進行自体は止めないベストエフォートです。
 
 ## 6. `/quiz_end`：クイズの手動終了（5517〜5536行）
 
