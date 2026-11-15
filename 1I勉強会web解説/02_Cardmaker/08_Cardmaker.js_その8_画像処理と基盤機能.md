@@ -200,7 +200,7 @@ function showBanner(msg, bg, color, iconHtml) {
 
 ---
 
-## 5. 遅延読み込みチャンクの仕組み本体（4407〜4456行）
+## 5. 遅延読み込みチャンクの仕組み本体（5828行付近）
 
 これまで何度も登場した「実際の機能は別ファイルに分離されている」という仕組みの、中核となる実装です。
 
@@ -213,13 +213,19 @@ function loadChunk(name, src) {
     const s = document.createElement('script');
     s.src = src;
     s.onload = () => { _chunkDone.add(name); resolve(); };
-    s.onerror = () => reject(new Error('chunk load failed: ' + src));
+    s.onerror = () => {
+      // 失敗したPromiseをキャッシュに残すと、次に呼んでも二度と読み直されない
+      delete _chunkPromises[name];
+      s.remove();
+      reject(new Error('chunk load failed: ' + src));
+    };
     document.head.appendChild(s);
   });
   return _chunkPromises[name];
 }
 ```
 - `document.createElement('script')`で新しい`<script>`タグをその場で作り、`src`（読み込み先のファイル）を指定して`<head>`に追加します。これによりブラウザがそのファイルをダウンロード・実行してくれます。**ビルドツールを使わずに「機能を後から追加でダウンロードする」を実現している方法**です（このサイト全体がビルドツールを使わない設計であることは[00_HTML構造とページ全体像.md](00_HTML構造とページ全体像.md)でも触れました）。
+- **読み込みに失敗したとき（2026/11/16変更）**：`onerror`で`_chunkPromises[name]`を削除し、失敗した`<script>`タグも取り除きます。以前は失敗した`Promise`がそのまま残り、通信が回復しても次に呼ばれたとき同じ失敗が返るだけで、ページを再読み込みするまで二度と読み直されませんでした。今は次に呼ばれたとき新しく読み込み直します。
 - `_chunkPromises`は「そのチャンク（機能のかたまり）を読み込むための`Promise`」を名前ごとに覚えておく入れ物です。すでに読み込み中・読み込み済みなら、新しく`<script>`タグを作らず、同じ`Promise`を使い回します（同じファイルを二重に読み込んでしまうのを防ぐ）。
 
 ```js

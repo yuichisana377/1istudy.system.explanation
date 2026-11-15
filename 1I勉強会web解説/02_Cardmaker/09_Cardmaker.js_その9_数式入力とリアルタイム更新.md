@@ -319,7 +319,7 @@ startRealtimeUpdates();
 async function checkCardsUpdate() {
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 5000);
+    const timer = setTimeout(() => controller.abort(), 15000);
     // ★ cache: 'no-store' を追加：これが無いと、ハッシュ比較のための取得自体が
     //   キャッシュされたレスポンスを見てしまい、更新検知が機能しないことがあるため。
     const res = await fetch(`${API_BASE}list_cards`, { signal: controller.signal, cache: 'no-store' });
@@ -327,18 +327,19 @@ async function checkCardsUpdate() {
     const txt = await res.text();
     const hash = await digestMessage(txt);
 
-    // 初回は保存だけ
-    if (lastCardsHash === null) {
+    // 初回は保存だけ（ただし一覧の取得がまだ一度も成功していないなら、そのまま取り直す）
+    if (lastCardsHash === null && decksSynced) {
       lastCardsHash = hash;
       return;
     }
 
-    // ハッシュが変わっていなければ何もしない
-    if (hash === lastCardsHash) return;
-    lastCardsHash = hash;
+    // ハッシュが変わっておらず、取得済みなら何もしない
+    if (decksSynced && hash === lastCardsHash) return;
 
     // データをバックグラウンドでマージ（プレイ中・編集中の画面はそのまま）
+    // ★ ハッシュは取り込みが成功してから更新する（失敗したら次回また取り直す）
     await fetchAndMergeDecks();
+    lastCardsHash = hash;
 
     // 一覧画面を見ている時だけ、その場で再描画する
     const activeScreen = document.querySelector('.screen.active')?.id;
@@ -348,6 +349,7 @@ async function checkCardsUpdate() {
   } catch(e) {}
 }
 ```
+- **2026/11/16の変更**：以前は初回に「ハッシュを控えるだけ」で終わり、`fetchAndMergeDecks()`が失敗していても二度と取り直されませんでした。今は`decksSynced`（一覧を一度でも取り込めたか。03_Cardmakerの1節）が`false`の間は、ハッシュが同じでも毎回取り直します。また`lastCardsHash`の更新は取り込みが**成功した後**に移したので、取り込みだけ失敗した場合も次回のポーリングで再試行されます。タイムアウトも5秒から15秒に延ばしました。
 - 変更を検知したら、まずデータだけはバックグラウンドで`decks`／`localStorage`に反映します。ただし、**画面の再描画は一覧画面（`screen-list`）を見ているときだけ**行います。コメントには「編集中／プレイ中の画面はそのままにして、リロードもしない。データは反映されているので、次に一覧へ戻ったときには最新の状態になっている」とあります。今まさにカードを編集している最中に、裏で受け取った他人の更新で画面が突然作り直されてしまうと、入力中の内容が失われかねないため、このような使い分けになっています。
 
 各チェック関数のあとには、SSEが機能しなかった場合の保険として`setInterval(..., 10000)`（10秒ごと）のポーリングも併設されています。（2026/11/14追記：この個別の`setInterval`は無くなりました。保険のポーリングは7.1節の`startLiveUpdates()`がまとめて行い、SSE接続中は60秒に1回、切れていれば10秒に1回です。）
@@ -359,7 +361,7 @@ async function forceRefreshOnReturn() {
   if (isForceRefreshing) return;
   isForceRefreshing = true;
   try {
-    await Promise.all([fetchAndMergeDecks(), fetchAndMergeFolders(), fetchAndMergeOrder(), fetchAndMergeStudyData()]);
+    await Promise.allSettled([fetchAndMergeDecks(), fetchAndMergeFolders(), fetchAndMergeOrder(), fetchAndMergeStudyData()]);
     if (document.querySelector('.screen.active')?.id === 'screen-list') { renderDeckListUI(); }
     preloadUnsureBadges();
   } finally { isForceRefreshing = false; }
@@ -375,6 +377,7 @@ document.addEventListener('visibilitychange', () => {
 ```
 - コメントに、この処理が必要な理由が具体的に説明されています。ブラウザ（特にChrome）には「bfcache（back-forward cache）」という仕組みがあり、他のページに移動して「戻る」で復帰したとき、ページのスクリプトを再実行せず、**凍結していた状態をそのまま復元する**ことがあります。この場合、`setInterval`によるポーリングは（凍結されていたぶん）次のタイミングまで再開せず、しばらく古いデータのままになってしまいます。スマホでアプリを切り替えて長時間放置した場合も同様です。
 - `pageshow`イベントの`e.persisted`（bfcacheから復元されたことを示すフラグ）や、`visibilitychange`イベント（タブ／アプリが表示状態に戻った）を検知した瞬間に、10秒待たず即座に最新データを取りに行くことで、この「しばらく古いデータのまま」という状態を解消しています。
+- `Promise.all`から`Promise.allSettled`に変えた（2026/11/16）ので、4つのうち1つが失敗しても、成功した分は反映されます。
 - `isForceRefreshing`というフラグで、短時間に何度もこのイベントが発生しても、処理が重複して走らないようにガードしています。
 
 ### 7.4 学習データの更新チェック（5097〜5113行）

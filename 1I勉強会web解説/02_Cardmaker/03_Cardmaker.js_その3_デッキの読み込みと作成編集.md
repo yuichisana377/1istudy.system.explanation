@@ -4,9 +4,11 @@
 
 ---
 
-## 1. サーバーからデッキ一覧を取得する：`fetchAndMergeDecks()`（1760〜1842行）
+## 1. サーバーからデッキ一覧を取得する：`fetchAndMergeDecks()`（1763〜1845行付近）
 
 一覧画面に表示する「軽量なメタ情報だけ」（カード本体は含まない：名前・件数・科目・公開者など）をサーバーから取得し、この端末の`decks`配列に反映します。カード本体（問題文・解答・画像）は、実際にそのデッキを開くときに別途取得します（次節）。これにより、デッキ数や画像が増えても一覧の表示自体は軽いままになります。
+
+**取得に失敗したときの扱い（2026/11/16変更）**：以前は失敗しても静かに終わるだけで、「一度失敗すると二度と取り直されない」不具合がありました。今は①タイムアウトを15秒に延ばし、②サーバーが`{ok:false}`を返したら`throw new Error(data.error || 'list_cards failed')`で例外にし（呼び出し側が失敗を知って再試行できるように）、③取り込みに成功して`saveDecks(decks)`した後でだけ、モジュール変数`decksSynced = true`にします。`decksSynced`は「一覧を一度でも取り込めたか」の目印で、9節の`checkCardsUpdate()`が使います。
 
 `fetched`を組み立てる`.map(s => {...})`の中で、サーバーから来た情報と、この端末に元々あった情報（`existing`）をどう組み合わせるかが細かく調整されています：
 
@@ -195,29 +197,55 @@ async function loadDeckCardsWithRecovery(deckId) {
 
 ---
 
-## 3. `renderDeckList()`とバックグラウンドでの「わからない」バッジ先読み（1764〜1790行）
+## 3. `renderDeckList()`・自動再試行とバックグラウンドでの「わからない」バッジ先読み（2020〜2070行付近）
 
 ```js
+let deckListRetryTimer = null;
+let deckListRetryCount = 0;
+function isAuthFetchError(r) {
+  return r.status === 'rejected' && /not_logged_in|guild_membership_required/.test(String(r.reason && r.reason.message));
+}
+async function syncDeckListData() {
+  const rs = await Promise.allSettled([fetchAndMergeDecks(), fetchAndMergeFolders(), fetchAndMergeOrder(), fetchAndMergeStudyData()]);
+  if (document.querySelector('.screen.active')?.id === 'screen-list') renderDeckListUI();
+  preloadUnsureBadges();
+  clearTimeout(deckListRetryTimer); deckListRetryTimer = null;
+  if (rs.some(isAuthFetchError) || !rs.some(r => r.status === 'rejected')) {
+    deckListRetryCount = 0; return;
+  }
+  deckListRetryCount++;
+  const delay = Math.min(30000, 2000 * Math.pow(2, deckListRetryCount));
+  deckListRetryTimer = setTimeout(deckListRetryTick, delay);
+}
+async function deckListRetryTick() {
+  deckListRetryTimer = null;
+  if (document.hidden || document.querySelector('.screen.active')?.id !== 'screen-list') {
+    deckListRetryTimer = setTimeout(deckListRetryTick, 5000); return;
+  }
+  await syncDeckListData();
+}
 async function renderDeckList() {
   decks = loadDecks();
   folders = loadFoldersCache();
   renderDeckListUI();
-  try {
-    await Promise.all([fetchAndMergeDecks(), fetchAndMergeFolders(), fetchAndMergeOrder(), fetchAndMergeStudyData()]);
-    renderDeckListUI();
-    preloadUnsureBadges();
-  } catch(e) {}
+  clearTimeout(deckListRetryTimer); deckListRetryTimer = null;
+  await syncDeckListData();
 }
 ```
-- まずキャッシュ（`localStorage`）の内容で即座に描画してから、`Promise.all`（複数の非同期処理を同時に走らせ、全部終わるのを待つ）で4種類のサーバー問い合わせを並行して行い、終わったら最新の内容で再描画します。「まずキャッシュ、次に本物」という2段階の考え方は他の箇所（`showScreen`など）とも共通しています。
+- まずキャッシュ（`localStorage`）の内容で即座に描画し、次に4種類のサーバー問い合わせを`Promise.allSettled`で並行して行います。`Promise.all`は1つでも失敗すると全体が失敗扱いになり、成功した分まで捨てられてしまいますが、`allSettled`は「成功・失敗の結果を全部集めて返す」ので、成功分は反映できます。「まずキャッシュ、次に本物」という2段階の考え方は他の箇所（`showScreen`など）とも共通しています。
+- **自動再試行（2026/11/16追加）**：1つでも失敗が残っていれば、2秒→4秒→8秒…と間隔を倍々にして（上限30秒）取り直します。以前は失敗するとそのまま放置され、画面を切り替えるか再読み込みするまで二度と取りに行きませんでした。
+- 再試行の予約は`deckListRetryTimer`1本だけにしています。予約するたび・`renderDeckList()`を呼ぶたびに前の予約を`clearTimeout`で取り消すので、一覧に戻るたびに再試行が何本も並行して走ることはありません。一覧画面を見ていない・タブが非表示の間は、5秒ごとに様子を見るだけで取得はしません。
+- **ログイン切れ（`not_logged_in`）やDiscordサーバー未参加（`guild_membership_required`）は再試行しません**。待っても直らないエラーなので、永久に通信し続けないためです。
 
 ```js
 function preloadUnsureBadges() {
-  const targets = decks.filter(d => d.filename && d.cardsLoaded === false && (studyDataCache.unsure[d.filename] || []).length > 0);
+  const targets = decks.filter(d => d.filename && d.cardsLoaded === false && (studyDataCache.unsure[d.filename] || []).length > 0
+    && !loadingDeckIds.has(d.id)
+  );
   targets.forEach(d => ensureDeckCardsLoaded(d.id));
 }
 ```
-- 「わからない」バッジは、そのデッキのカード本体を読み込んでいないと件数を計算できません。コメントによれば、Safariなど普段使っている端末ではキャッシュが残っているので気づきにくいのですが、Discordアプリ内蔵ブラウザのようにストレージが毎回まっさらな環境だと、一覧を開いた直後は「わからない」バッジが1件も出ない、という問題がありました。この関数は、「わからない」の記録があるのにカード本体は未読み込みのデッキだけを裏でこっそり読み込み直し（`await`せずに呼びっぱなし）、あとからバッジを反映させます。
+- 「わからない」バッジは、そのデッキのカード本体を読み込んでいないと件数を計算できません。コメントによれば、Safariなど普段使っている端末ではキャッシュが残っているので気づきにくいのですが、Discordアプリ内蔵ブラウザのようにストレージが毎回まっさらな環境だと、一覧を開いた直後は「わからない」バッジが1件も出ない、という問題がありました。この関数は、「わからない」の記録があるのにカード本体は未読み込みのデッキだけを裏でこっそり読み込み直し（`await`せずに呼びっぱなし）、あとからバッジを反映させます。`!loadingDeckIds.has(d.id)`は「すでに読み込み中のデッキは重ねて取りに行かない」ための条件で、自動再試行で何度もこの関数が呼ばれても同じデッキの取得が積み重ならないようにしています。
 
 ---
 
