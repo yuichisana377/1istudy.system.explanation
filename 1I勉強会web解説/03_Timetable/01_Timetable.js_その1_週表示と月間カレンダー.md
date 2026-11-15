@@ -122,23 +122,42 @@ async function loadTTHomeworks() {
   } catch(e) { ttHomeworks = []; }
   renderTimetable();
 }
+// 学期データを一度でも取得できたか（false の間は DEFAULT_TIMETABLE を出さない）
+let termsLoaded = false;
+const TERMS_CACHE_KEY = 'tt_terms_cache_' + GUILD_ID;
+// 前回の学期データが端末に残っていれば、サーバー応答を待たずに使う
+(function restoreTermsCache() {
+  try {
+    const raw = localStorage.getItem(TERMS_CACHE_KEY);
+    const arr = raw ? JSON.parse(raw) : null;
+    if (Array.isArray(arr) && arr.length) { terms = arr; termsLoaded = true; }
+  } catch(_) {}
+})();
+
 async function loadTerms() {
   try {
-    const res  = await api(`${TERM_API.LIST}?guild_id=${GUILD_ID}`);
-    terms = (res.ok && Array.isArray(res.terms)) ? res.terms : [];
-  } catch(e) { terms = []; }
+    const res = await api(`${TERM_API.LIST}?guild_id=${GUILD_ID}`);
+    if (res && res.ok && Array.isArray(res.terms)) {
+      terms = res.terms;
+      termsLoaded = true;
+      try { localStorage.setItem(TERMS_CACHE_KEY, JSON.stringify(terms)); } catch(_) {}
+    }
+  } catch(e) { /* 直前のデータを保持 */ }
   renderTimetable();
 }
 ```
-- どちらも、失敗時は空配列にフォールバックしてから、必ず`renderTimetable()`を呼んで画面を更新します。
+- `loadTTHomeworks()`は、失敗時に空配列へフォールバックしてから`renderTimetable()`を呼びます。
+- `loadTerms()`は**失敗しても`terms`を空に戻しません**（通信エラーや`{ok:false}`のときは直前のデータを保持）。以前は失敗のたびに`terms = []`にしていたため、定期更新で通信が一瞬失敗するたびに、編集前の`DEFAULT_TIMETABLE`が表示されてしまう不具合がありました。
+- 成功した学期データは`localStorage`にも控え、次回起動時はサーバー応答を待たずに使います。ただしログイン切れなどで`list_terms`が失敗し続けると、端末のキャッシュを使い続けます。
 
 ```js
 function getTimetableForDate(dateStr) {
   const term = terms.find(t => t.start_date <= dateStr && dateStr <= t.end_date);
-  return (term && term.timetable) ? term.timetable : DEFAULT_TIMETABLE;
+  if (term && term.timetable) return term.timetable;
+  return termsLoaded ? DEFAULT_TIMETABLE : {};
 }
 ```
-- 指定した日付が、登録されているどれかの学期の期間内（`start_date`〜`end_date`）にあれば、その学期専用の時間割を使い、どの学期にも当てはまらなければ`DEFAULT_TIMETABLE`（1.1節）にフォールバックします。コメントには「複数の学期が同じ日付に重なることは保存時にサーバー側で防いでいるため、最初に一致したものを使えばよい」とあり、データの整合性はサーバー側の保存処理が保証している前提で、ここではシンプルに最初の一致を使うだけになっています。
+- 指定した日付が、登録されているどれかの学期の期間内（`start_date`〜`end_date`）にあれば、その学期専用の時間割を使います。どの学期にも当てはまらなければ`DEFAULT_TIMETABLE`（1.1節）にフォールバックしますが、**学期データをまだ一度も取得できていない間は空の時間割（`{}`）を返し、編集前の時間割を出さない**ようにしています。コメントには「複数の学期が同じ日付に重なることは保存時にサーバー側で防いでいるため、最初に一致したものを使えばよい」とあり、データの整合性はサーバー側の保存処理が保証している前提で、ここではシンプルに最初の一致を使うだけになっています。
 
 ---
 
