@@ -19,9 +19,7 @@ const hasUnsyncedLocal = !!existing && (
       && document.querySelector('.screen.active')?.id === 'screen-edit'));
 const cachedIsStale = existing && existing.cardsLoaded && !hasUnsyncedLocal
   && typeof s.count === 'number' && s.count < existing.cards.length;
-const revChanged = existing && existing.cardsLoaded && !hasUnsyncedLocal
-  && !!s.rev && existing.bodyRev !== s.rev;
-const keepLoadedCards = existing && existing.cardsLoaded && !cachedIsStale && !revChanged;
+const keepLoadedCards = existing && existing.cardsLoaded && !cachedIsStale;
 ```
 - すでにカード本体を読み込み済みなら、それを引き継いで再取得を省略したいところですが、**サーバー側の最新枚数がこの端末のキャッシュより減っている場合は引き継がない**という条件が付いています。コメントによれば、これをやらないと「他の人がカードを減らした後、この端末が古い（多い）枚数をキャッシュとして持ち続けてしまい、後で説明する枚数不一致チェックが永遠に満たされず、そのデッキが二度と開けなくなる」という「詰み」状態を招くためです。
 - ただし**例外**があります（`hasUnsyncedLocal`、2026/11/08追加）。サーバーへまだ反映できていない手元の追加分があるデッキ（`deckSyncDirty`に入っているもの。CSV一括読み込みの直後など）と、今まさに編集画面で開いているデッキは、「サーバーの枚数が少ない＝古いキャッシュ」とは判定しません。これを怠ると、反映が終わる前に他の更新通知で一覧が再取得されたとき、追加したカードが空に戻され、そのまま「公開して保存」すると空の内容でサーバーを上書きして消えてしまうためです。`deckSyncDirty`の仕組みは[06_Cardmaker.js_その6_カード編集と学習データ同期.md](06_Cardmaker.js_その6_カード編集と学習データ同期.md)の4節で説明します。

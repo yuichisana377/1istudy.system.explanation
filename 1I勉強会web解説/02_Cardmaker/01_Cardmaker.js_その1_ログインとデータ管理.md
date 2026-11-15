@@ -65,7 +65,17 @@ applyAccountHeader();
 ```js
 const STORE_KEY = 'cardmaker_decks_v1';
 function loadDecks() { try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; } catch { return []; } }
-function saveDecks(d) { localStorage.setItem(STORE_KEY, JSON.stringify(d)); }
+function saveDecks(d) {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(d)); return; } catch (e) {}
+  // 容量（約5MB）超過時は、公開済みデッキのカード本体を外した版で保存し直す（本体は開くときに再取得できる）。
+  // 編集中のデッキ・未同期のデッキは外さない。
+  try {
+    let dirty; try { dirty = deckSyncDirty; } catch (e) { dirty = new Set(); }
+    const slim = d.map(x => (x.filename && !dirty.has(x.id) && x.id !== currentDeckId)
+      ? { ...x, cards: [], cardsLoaded: false } : x);
+    localStorage.setItem(STORE_KEY, JSON.stringify(slim));
+  } catch (e) { console.warn('[cardmaker] デッキ一覧をこの端末に保存できませんでした', e); }
+}
 function genId() { return Date.now().toString(36) + Math.random().toString(36).slice(2,6); }
 ```
 - デッキのデータは`localStorage`（この端末に保存される領域）に丸ごとJSONとして保存されています。サーバーとのやり取りは別に行われますが、**この端末での表示・操作は基本的にこの`localStorage`の中身を見て行われる**という設計です（サーバーと完全同期するのではなく、この端末用のキャッシュとして機能する）。
