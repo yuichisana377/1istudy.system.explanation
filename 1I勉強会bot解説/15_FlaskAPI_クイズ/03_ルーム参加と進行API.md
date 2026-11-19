@@ -207,15 +207,17 @@ def quiz_answer():
         correct = (choice_index == q["correct_index"])
         player["cur_answer"] = choice_index
         player["cur_correct"] = correct
-        player["cur_answered_at"] = now
+        # ★ 押した瞬間の時刻(pressed_at_ms)があれば [出題開始, now] かつ now-2秒以内に丸めて使う
+        pressed = data.get("pressed_at_ms")
+        answered_at = now
+        if isinstance(pressed, (int, float)) and not isinstance(pressed, bool) and pressed == pressed:
+            answered_at = min(now, max(pressed / 1000.0, room["question_started_at"], now - 2.0))
+        player["cur_answered_at"] = answered_at
         # ★ 追加：同点タイブレーク用に、回答にかかった時間（正誤にかかわらず）を積算する
-        player["total_answer_time"] = player.get("total_answer_time", 0.0) + (now - room["question_started_at"])
+        player["total_answer_time"] = player.get("total_answer_time", 0.0) + (answered_at - room["question_started_at"])
         if correct:
             points = QUIZ_ANSWER_BASE_POINTS
-            if room["first_correct_id"] is None:
-                room["first_correct_id"] = student_id
-                room["first_correct_nickname"] = player["nickname"]
-                points += QUIZ_FIRST_CORRECT_BONUS
+            # （一番乗りボーナスはここでは付けず、発表時に押した時刻が最も早い正解者へ付与する）
             # ★ 追加（2026/08/27）：ホストの詳細設定「ボーナス問題」対象なら、
             #   一番乗りボーナスも含めて得点をまるごと2倍にする。
             if room["current_q"] in room.get("bonus_indices", set()):
@@ -239,7 +241,7 @@ def quiz_answer():
 - **★ 追加：見学中ガード**。途中参加でこの問題にはまだ混ざれない（`active_from_q`が今の`current_q`より大きい）人からの回答は`"spectating"`エラーで拒否します。フロント側はそもそも見学中の人には選択肢のボタン自体を出さないため、通常はここに到達しませんが、APIを直接叩かれた場合の保険として二重にガードしています。
 - `if player["cur_answer"] is not None:`… **既に回答済みの場合、二重に回答を送れないようにするガード**です。これにより、同じ問題に対して1人が複数回答を送りつけて得点を不正に稼ぐことはできません。
 - **★ 追加：`cur_answered_at`・`total_answer_time`**。回答した時刻をその問題ごとに記録（`cur_answered_at`、次の問題が始まるとリセットされる）するのに加え、回答にかかった時間（`now - room["question_started_at"]`、正誤にかかわらず）を`total_answer_time`に積算していきます。前者は正解発表(reveal)中のミニ順位表の並び順（押した順）に、後者はスコアが同点だったときの全体順位のタイブレークに使われます。
-- `if room["first_correct_id"] is None:`… その問題での「一番最初の正解者」だけにボーナス（`QUIZ_FIRST_CORRECT_BONUS`）が付きます。`first_correct_id`が既に埋まっていれば（誰か他の人が先に正解していれば）、このボーナス判定はスキップされます。
+- **★ 変更：一番乗りボーナスの付与場所**。以前はここ（到着順）で`first_correct_id`を決めていましたが、通信遅延で不利にならないよう、`_quiz_autoadvance_locked`が`question`→`reveal`へ進める瞬間に、`cur_answered_at`（押した時刻）が最も早い正解者へ`QUIZ_FIRST_CORRECT_BONUS`（ボーナス問題なら2倍）を付けます。クライアントは`pressed_at_ms`（サーバー時計換算の押下時刻）と`q_index`（見ていた問題番号。違えば`stale_question`で拒否し、遅れた再送が次の問題の回答にならないようにする）も送ります。時間切れ後に届いた回答も受け付けません。
 - **★ 追加（2026/08/27）：`bonus_indices`による得点2倍**。ホストの詳細設定「ボーナス問題」（[02_ルーム作成と過去問ランキング.md](02_ルーム作成と過去問ランキング.md)の1.1節で、作成時に一度だけ抽選・固定される`room["bonus_indices"]`）に、今の問題番号（`room["current_q"]`）が含まれていれば、一番乗りボーナスまで含めた合計を`*2`する。掛け算は`player["score"] += points`の**直前**、つまり基本点・一番乗りボーナスの両方を足し終えた後に行うため、「10点問題でボーナス」なら12点（10+2）→24点、「ボーナスでない一番乗り」なら12点のまま、という素直な「まるごと2倍」になる。
 - **★ 追加（同日・不具合修正）：`player["cur_points"]`**。Web側の正解発表フィードバック（[../../1I勉強会web解説/05_Quiz/02_Quiz.js_その2_対戦の進行とリアルタイム同期.md](../../1I勉強会web解説/05_Quiz/02_Quiz.js_その2_対戦の進行とリアルタイム同期.md)）は、以前「+10点」「+12点」という固定文言を出していたため、ボーナス問題で実際は+20点/+24点なのに表示だけ古いままという不一致が起きていた（「ちゃんと2倍になってるんだけど、表示が+12になってしまっている」との報告）。`points`を確定した直後に`player["cur_points"] = points`として控えておき、`_quiz_room_snapshot`のreveal中スナップショットで`your_points`としてクライアントへそのまま渡すことで、表示側が倍率計算を再現する必要が無いようにした（サーバー側の実際の計算結果を1箇所に集約し、表示はそれをそのまま出すだけにする、という設計）。`cur_answer`/`cur_correct`と同じ3箇所（player初期化2箇所・reveal→次の問題への遷移時のリセット）で一緒にリセットする。
 - `_quiz_autoadvance_locked(room, now)`… コメントの通り、この回答によって「全員が回答し終わった」場合、次のポーリングを待たずに、その場で正解発表（`reveal`）へ進めます。これも「体感の速さ」のための工夫で、[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)で見た`_quiz_scheduler_loop`（0.15秒ごとの自動チェック）と合わせて、**あらゆる場面でできるだけ素早く状態を進行させる**という一貫した設計方針が表れています。

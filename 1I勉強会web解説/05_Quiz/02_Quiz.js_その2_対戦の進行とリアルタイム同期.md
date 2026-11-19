@@ -130,8 +130,10 @@ renderedQIndex = room.current_q; renderedState = room.state;
 const choicesEl = document.getElementById(choicesId);
 if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dataset.built) !== room.current_q) {
   choicesEl.innerHTML = room.question.choices.map((c, i) => `
-    <button class="qz-choice-btn ${CHOICE_CLASSES[i]}" onclick="submitAnswer(${i}, '${choicesId}', '${waitingNoteId}')">${escapeHtml(c)}</button>`).join('');
+    <button class="qz-choice-btn ${CHOICE_CLASSES[i]}" data-idx="${i}">${escapeHtml(c)}</button>`).join('');
   choicesEl.dataset.built = room.current_q;
+  // ★ 押した瞬間(pointerdown)に反応させる。作り直されない親要素でイベントを受ける（委譲）
+  if (!choicesEl.dataset.bound) { /* pointerdown と click の両方で submitAnswer(idx, ..., Date.now() + quizClockOffsetMs) を呼ぶ */ }
 }
 ```
 - 選択肢ボタン自体は、**問題が変わったとき（または初回）だけ**作り直します。`choicesEl.dataset.built`に「今表示している選択肢がどの問題番号のものか」を記録しておき、それと今回のデータの`current_q`が一致していれば、ボタンの再構築自体をスキップします。400msごとの高頻度なポーリングのたびに、変わっていない部分までDOMを作り直すのは無駄なので、必要なとき（問題が切り替わったとき）だけに絞る最適化です。
@@ -317,7 +319,8 @@ function tickCountdownNum(serverNow) {
 ## 5. 回答の送信とホスト操作（883〜937行）
 
 ```js
-async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId = 'pp-waiting-note') {
+// ★ 変更：押した瞬間の時刻(pressedAtMs)と問題番号(q_index)も送り、通信失敗時だけ最大3回再送する
+async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId = 'pp-waiting-note', pressedAtMs = Date.now() + quizClockOffsetMs) {
   if (hasAnsweredThisQ) return;
   hasAnsweredThisQ = true;
   const choicesEl = document.getElementById(choicesId);
@@ -329,7 +332,8 @@ async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId
   });
   const waitingNote = document.getElementById(waitingNoteId);
   if (waitingNote) waitingNote.style.display = '';
-  await apiPost('quiz_answer', withAuth({ code: roomCode, choice_index: choiceIndex }));
+  // （実装では network エラーの間だけ最大3回再送。送れなければ hasAnsweredThisQ=false に戻して押し直せるようにする）
+  await apiPost('quiz_answer', withAuth({ code: roomCode, choice_index: choiceIndex, pressed_at_ms: pressedAtMs, q_index: renderedQIndex }));
   pollOnce();
 }
 ```
