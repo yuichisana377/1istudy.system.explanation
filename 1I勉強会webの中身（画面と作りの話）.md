@@ -18,7 +18,7 @@
 | `ShareApproval.html` | 共有の確認 | 本人以外がCardMakerのデッキ共有リンクを発行したがっているときの、DiscordのDMリンク先 |
 | `DeckShare.html` | 共有デッキ閲覧 | CardMakerで発行された共有リンクの閲覧先。ログイン不要・そのデッキ1件だけを閲覧専用で見せる |
 | `TanCheck.html` | 単位チェッカー | 情報工学科1年生向け、評価割合から達成度を計算するツール（後述、少し毛色が違う） |
-| `TestPrep.html` | テスト対策 | カテゴリが「テスト」「試験」の予定から逆算し、デッキごとの1日の目標枚数と進み具合を出す（2026/11/20追加の試作。計画はこの端末の`localStorage`のみに保存） |
+| `TestPrep.html` | テスト対策 | カテゴリが「テスト」「試験」の予定を一覧し、テスト範囲（自由入力）・対象デッキの見た率（達成率）を出す。範囲のデッキは「まとめてプレイ」（Cardmaker.htmlの仮想フォルダ）や「みんなでクイズ」（Quiz.htmlのデッキ選択）へ渡せる（2026/11/20追加の試作。計画はこの端末の`localStorage`のみに保存） |
 
 ドロワーメニュー（左から出てくるナビ）を持つのは上記のうちログインが絡む6ページ（index/Timetable/Cardmaker/Notice/StudyLog/ServiceInfo）で、Quiz.html・Login.html・DeleteApproval.html・ShareApproval.html・DeckShare.html・TanCheck.htmlは単発の目的ページなのでドロワー自体を持ちません（`DeckShare.html`はそもそも予定など他の情報を一切見せない設計のため、ドロワーそのものが存在しません）。
 

@@ -691,7 +691,7 @@ function renderStudyTitle() {
 
 ---
 
-## 10. フォルダ単位でまとめて学習を始める：`openFolderPlayMode(folderId)`（3684〜）
+## 10. フォルダ単位でまとめて学習を始める：`openFolderPlayMode(folderId)`（4706〜）
 
 ```js
 async function openFolderPlayMode(folderId) {
@@ -727,6 +727,8 @@ async function openFolderPlayMode(folderId) {
 ```
 - フォルダ内の全デッキ（カードが1枚もあるものだけ）を対象に、それぞれの保留中の同期を待ってから、強制的に最新のカードを取り直します。
 - 一部のデッキだけ読み込みに失敗した場合、**失敗したデッキだけを対象に**再試行できるようにしています（`pending`を「まだ失敗しているデッキだけ」に絞り込んでループを繰り返す）。コメントには「1回失敗しただけで行き止まりのアラートを出して終わらせず、タイムアウトを含む一時的な通信エラーでフォルダのプレイを諦めなくて済むように」という意図が書かれています。
+
+★ 追加（2026/11/20）：`virtualPlays`（`Map`）に登録された「仮想フォルダ」（id は`tp:`＋テスト計画ID）も同じ関数でプレイできます。テスト対策ページ（`TestPrep.js`）が`sessionStorage.tpPlay`に`{id, name, filenames}`を置いて`Cardmaker.html?tpplay=1`へ遷移し、`startTestPrepPlayFromUrl()`が登録して`openFolderPlayMode`を呼びます。この場合`folders`には無いので、フォルダ名は`virtualPlayName()`、対象デッキは`filenames`に一致するものだけになり、該当が0件なら「プレイできるデッキがありません」と案内します。進捗キーは`folder:tp:<計画ID>`で、`folders`に無いためホームの「プレイ中」一覧には出ません。
 
 このあとは、実際に学習開始モーダル（`modal-play-mode`）の中身（対象問題数、「わからない」件数、「続きから」の有無など）を組み立てて表示します。「みんなでクイズを始める」の項目は、単一デッキが前提の機能なのでフォルダプレイでは非表示にする、という注記もあります。★ 追加：`setIconText`でフォルダ名を表示した直後に`setPlayModeDesc(folder ? folder.description : null)`を呼び、フォルダに説明（任意）が設定されていれば`#play-mode-desc`に表示します（デッキ単体のプレイは[07_Cardmaker.js_その7_学習モードとクイズ再生.md](07_Cardmaker.js_その7_学習モードとクイズ再生.md)の`openPlayMode`を参照）。
 
