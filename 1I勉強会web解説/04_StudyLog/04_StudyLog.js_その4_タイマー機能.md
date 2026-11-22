@@ -362,7 +362,7 @@ async function timerStop() {
 **開始（CardMaker側、`maybeAutoStartStudyTimer(memo, subject)`。`startStudyMode()`が学習画面を開くたびに呼ぶ）**：
 1. `GET /timer_state`でタイマーの現在状態を確認する。
 2. `"idle"`（誰も計測していない）のときだけ`POST /timer_start`でこの本人の計測を開始する。既に`"running"`／`"paused"`（本人が既に何かを計測中）なら何もしない＝横取りしない。
-3. `timer_start`を送る**直前**に（応答待ちの間に画面を閉じても片付け側が見つけられるよう先置きする。開始失敗・通信失敗でサーバーが動いていなければ消す）、`localStorage`のキー`"cm_pending_timer_memo"`に`{ memo: "CardMaker「◯◯」をプレイ", subject: deck.subject, ts: Date.now() }`を保存する。画面を閉じたとき（`visibilitychange`／`pagehide`）は学習画面表示中のみ`timer_pause`を送り、24時間より古い目印は破棄する。◯◯はプレイ中のデッキ名／フォルダ名（`studyBaseTitle`）、`subject`はプレイ中のデッキが持つ科目（フォルダをまとめてプレイ中は科目が1つに定まらないため`null`）。CardMakerの科目プルダウン（`modal-rename-subject`）とStudyLogの科目プルダウン（`SUBJECTS`）はどちらも同じ`/channels`（Discordのチャンネル名一覧）から作られているため、文字列がそのまま一致する。
+3. `timer_start`を送る**直前**に（応答待ちの間に画面を閉じても片付け側が見つけられるよう先置きする。開始失敗なら消す。通信失敗（タイムアウト等）はサーバー側の開始が遅れて成功することがあるため、6秒空けて2回とも未開始のときだけ消す）、`localStorage`のキー`"cm_pending_timer_memo"`に`{ memo: "CardMaker「◯◯」をプレイ", subject: deck.subject, ts: Date.now() }`を保存する。開始が成功したら、サーバーが返す計測ID（`timer_id`＝`created_at`、一時停止・再開でも変わらない）を目印に`timer_id`として控え、片付け時に今のタイマーと一致しなければ（別画面・別端末で手動開始された計測など）止めず目印だけ消す。画面を閉じたとき（`visibilitychange`／`pagehide`）は学習画面表示中のみ、目印の`timer_id`を添えて`timer_pause`を送り（サーバーは`timer_id`が違えば一時停止しない）、24時間より古い目印は破棄する。◯◯はプレイ中のデッキ名／フォルダ名（`studyBaseTitle`）、`subject`はプレイ中のデッキが持つ科目（フォルダをまとめてプレイ中は科目が1つに定まらないため`null`）。CardMakerの科目プルダウン（`modal-rename-subject`）とStudyLogの科目プルダウン（`SUBJECTS`）はどちらも同じ`/channels`（Discordのチャンネル名一覧）から作られているため、文字列がそのまま一致する。
 4. このキーは「まだ誰も（CardMaker自身も含めて）このタイマーを片付けていない」ことの目印としても使われる（後述）。
 5. 全体を`try/catch`で囲み、ログインしていない・通信に失敗した場合は何もしない（プレイ自体は絶対に止めないベストエフォート）。
 
