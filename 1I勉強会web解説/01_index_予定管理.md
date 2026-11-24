@@ -524,12 +524,14 @@ function scrollToToday() {
 
   window.scrollTo({
     top: offset,
-    behavior: 'auto'
+    behavior: 'instant'
   });
 }
 ```
 - 今表示されている予定（絞り込み後）の中から、スクロール先の日付を3段階で決めます：①今日ぴったりの予定があればそこ、②無ければ一番近い未来の日、③未来の予定が1件も無ければ、一番新しい過去の日。
-- 該当する日付のかたまり（`data-date`属性を目印にした`.date-group`要素）を画面上で探し、`getBoundingClientRect().top`（今の画面内での上端位置）を使って、ヘッダーに隠れない位置（70px分ずらす）までスクロールします。
+- 該当する日付のかたまり（`data-date`属性を目印にした`.date-group`要素）を画面上で探し、`getBoundingClientRect().top`（今の画面内での上端位置）を使って、ヘッダーに隠れない位置（70px分ずらす）までスクロールします。`behavior: 'instant'`なのは、CSS側（`Style.css`）が`scroll-behavior: smooth`なので、指定しないとゆっくり動いてしまい、その途中の位置を「今日の位置」と取り違えるためです。
+
+> **補足（実際の最新コードとの差）**：この節の`loadPlans()`は最小限の形に簡略化した説明です。実際の`Plan.js`は、前回の予定を`localStorage`のキャッシュから先に表示し、サーバーの結果で一覧を作り直します。作り直しの前に「利用者が自分でスクロールしたか」を確かめ、動かしていなければもう一度「今日」へ、動かしていれば見ていた日付が同じ位置に見えるように戻します（`captureScrollAnchor`／`restoreScrollAnchor`）。引用の行番号も現在の`Plan.js`（1279行）とはずれています。
 
 ---
 
