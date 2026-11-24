@@ -1,6 +1,6 @@
 # お知らせページ — 全体像・一覧・詳細表示・下書き保存（1〜416行）
 
-対象：`bot.1istudy.web/Notice.html`（266行）、`bot.1istudy.web/Notice.js`（983行）。用語は[../01_index_予定管理.md](../01_index_予定管理.md)の「0. ミニ用語辞典」も参照してください。
+対象：`bot.1istudy.web/Notice.html`（265行）、`bot.1istudy.web/Notice.js`（982行）。用語は[../01_index_予定管理.md](../01_index_予定管理.md)の「0. ミニ用語辞典」も参照してください。
 
 ## このページの特徴
 
