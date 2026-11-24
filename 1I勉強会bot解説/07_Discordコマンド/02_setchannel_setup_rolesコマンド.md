@@ -11,7 +11,11 @@
     app_commands.Choice(name="通生（朝5:30 / 夜20:00）", value="commute"),
     app_commands.Choice(name="寮生（朝7:20 / 夜20:00）", value="dorm"),
     app_commands.Choice(name="お知らせ用", value="main"),
+    app_commands.Choice(name="管理ログ用（荒らし対策の報告先）", value="modlog"),
 ])
+@app_commands.guild_only()
+@app_commands.default_permissions(administrator=True)
+@app_commands.checks.has_permissions(administrator=True)
 async def setchannel(interaction: discord.Interaction, type: app_commands.Choice[str] = None):
     await interaction.response.defer(ephemeral=True)
     guild_id = interaction.guild.id
@@ -24,6 +28,9 @@ async def setchannel(interaction: discord.Interaction, type: app_commands.Choice
     elif kind == "main":
         config["notice_channel_id"] = interaction.channel.id
         label = "お知らせ用"
+    elif kind == "modlog":
+        config["mod_log_channel_id"] = interaction.channel.id
+        label = "管理ログ用"
     else:
         config["remind_channel_id"] = interaction.channel.id
         label = "通生（朝5:30・夜20:00）"
@@ -36,10 +43,24 @@ async def setchannel(interaction: discord.Interaction, type: app_commands.Choice
     await interaction.followup.send(
         f"{label} の通知チャンネルを **#{interaction.channel.name}** に設定しました！"
     )
+
+
+@setchannel.error
+async def setchannel_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
+    if isinstance(error, app_commands.MissingPermissions):
+        msg = "このコマンドはサーバーの管理者のみ使えます。"
+    else:
+        msg = f"エラー: {error}"
+    if interaction.response.is_done():
+        await interaction.followup.send(msg, ephemeral=True)
+    else:
+        await interaction.response.send_message(msg, ephemeral=True)
 ```
-- `@app_commands.choices(type=[...])`… `type`引数を自由入力ではなく、あらかじめ決められた3つの選択肢（`Choice`）からしか選べないようにする指定です。[00_ユーティリティ関数と_addコマンド.md](00_ユーティリティ関数と_addコマンド.md)のオートコンプリート（自由入力＋候補表示）とは違い、こちらは**候補以外を入力できない**という、より厳格な制約です。通知チャンネルの種類は決め打ちで数が少ないため、こちらの方式が使われています。
+- `@app_commands.choices(type=[...])`… `type`引数を自由入力ではなく、あらかじめ決められた4つの選択肢（`Choice`）からしか選べないようにする指定です。[00_ユーティリティ関数と_addコマンド.md](00_ユーティリティ関数と_addコマンド.md)のオートコンプリート（自由入力＋候補表示）とは違い、こちらは**候補以外を入力できない**という、より厳格な制約です。通知チャンネルの種類は決め打ちで数が少ないため、こちらの方式が使われています。
 - `type: app_commands.Choice[str] = None`… デフォルト値が`None`なので、省略も可能です。省略時は`kind = type.value if type else "commute"`により`"commute"`（通生）扱いになります。
 - 選ばれた種類に応じて、`config`（このguildの設定）の対応するフィールドに、**今このコマンドを実行したチャンネルのID**（`interaction.channel.id`）を保存します。「このコマンドを実行したチャンネル自体が、その種類の通知先になる」という直感的な設定方法です。
+- **管理者限定**：`@app_commands.checks.has_permissions(administrator=True)`で、サーバーの管理者以外は実行できません（以前は誰でも実行できましたが、荒らし対策の報告先まで設定できてしまうため制限しました）。`default_permissions(administrator=True)`でコマンド一覧にも管理者以外には表示されなくなり、`@setchannel.error`が権限不足のときの案内文を返します。
+- 「管理ログ用」（`mod_log_channel_id`）は荒らし対策（連投スパム検知・禁止ワード検知）の報告先です。未設定ならサーバーオーナーへのDMで報告されます。
 - 保存された`config`は、後述する自動通知の章（`send_tomorrow_plans`など）で、「どのチャンネルに通知を送るか」を決めるために読み込まれることになります。
 
 ## 2. `/setup_roles`：通生/寮生の振り分けパネル（2138〜2198行）

@@ -88,7 +88,7 @@ async def help_command(interaction: discord.Interaction):
         "**/list** — 予定を表示する\n"
         "**/delete** — 予定を削除する\n"
         "**/edit** — 予定を編集する\n"
-        "**/setchannel** — 通知チャンネルを設定する（通生／寮生／お知らせ用を選択可）\n"
+        "**/setchannel** — 通知チャンネルを設定する（通生／寮生／お知らせ用／管理ログ用を選択可・管理者のみ）\n"
         "**/setup_roles** — 通生/寮生 振り分けパネルを投稿する\n"
         "**/id連携** — StudyLogにログインして発行した連携コードを使い、DiscordアカウントをStudyLogと連携する（DM通知を受け取れるようになる）\n"
         "**webページ** - https://study-web.chiro377.com/\n"
