@@ -252,18 +252,18 @@ function checkHoverFolder(clientX, clientY) {
 ```
 - `document.elementFromPoint(x, y)`で「指の真下に今何が表示されているか」を調べます。ただし、そのままだと掴んでいるカード自身（指のすぐ下にあるので）が拾われてしまうため、判定する一瞬だけ`pointerEvents = 'none'`（このカードはクリック・タップの対象外、と一時的に無効化する）にして、その裏にある本当のフォルダを検出できるようにしています。
 - 見つかったフォルダが、今掴んでいる項目の移動先として許可されているか（`canMoveFolderTo`/`canMoveDeckTo`、[01_Cardmaker.js_その1_ログインとデータ管理.md](01_Cardmaker.js_その1_ログインとデータ管理.md)）も確認します。
-- 「一覧の上端まで持ち上げたら親フォルダに戻れる」という逆方向の操作（`getExitZoneRect`）も同じ仕組みで実現しています。フォルダを「開く」動きも「出る（親に戻る）」動きも、結局は「今のフォルダから、目的のフォルダIDへ移動する」という同じ処理（次節の`autoOpenFolderDuringDrag`）で扱えるためです。
+- 「一覧の上端まで持ち上げたら親フォルダに戻れる」という逆方向の操作（`getExitZoneRect`）も同じ仕組みで実現しています。フォルダを「開く」動きも「出る（親に戻る）」動きも、結局は「今のフォルダから、目的のフォルダIDへ移動する」という同じ処理（次節の`dropDraggedIntoFolder`）で扱えるためです。
 
 ```js
 function applyHoverTarget(el, targetFolderId) {
   clearBlockedHover();
   if (hoverClearTimer) { clearTimeout(hoverClearTimer); hoverClearTimer = null; }
-  if (hoverFolderEl === el) return;
+  if (hoverFolderEl === el) { hoverTargetId = targetFolderId; return; }
   clearHoverFolder();
   hoverFolderEl = el;
+  hoverTargetId = targetFolderId;   // 離した時にここへ入れる
   hoverFolderEl.style.outline = '3px solid #3b82f6';
   hoverFolderEl.style.outlineOffset = '-3px';
-  hoverFolderTimer = setTimeout(() => { hoverFolderTimer = null; autoOpenFolderDuringDrag(targetFolderId); }, HOVER_OPEN_MS);
 }
 
 function scheduleClearHoverFolder() {
@@ -298,10 +298,16 @@ function clearBlockedHover() {
   }
 }
 ```
-- 同じフォルダの上に留まり続けている間だけ青い枠線でハイライトし、0.65秒（`HOVER_OPEN_MS`）経過したら実際にそのフォルダを開く処理を呼びます。対象から外れたら（`clearHoverFolder`）タイマーとハイライトをリセットします。
+- フォルダの上に重なっている間は青い枠線でハイライトするだけで、**フォルダは自動では開きません**（2026/11/25に変更。以前は0.65秒＝`HOVER_OPEN_MS`重ねると自動で開いていました）。重ねた先のフォルダid（ルートなら`null`）は`hoverTargetId`に覚えておき、指を離した時（`endDrag`）に使います。対象から外れたら（`clearHoverFolder`）ハイライトを消します。
 - 無効な移動先（後述）には赤枠（`hoverBlockedEl`）で「開けるホバー」とは別の状態を示します。2つの状態は独立していて、どちらへ切り替わるときも相手側を消してから自分を立てる、という対称的な構造になっています。
 
 > **★ この節の変更履歴（初版からの主な変更点）**
+> - **2026/11/25（Windows風の「重ねて離す」方式に変更）**：フォルダに重ねて待つと自動で開いて
+>   ページごと移動する方式をやめ、重ねると青枠→離すとそのフォルダの中へ入る方式にした。
+>   ページは切り替わらず、移動した項目だけが現在の一覧から消える。`autoOpenFolderDuringDrag`は
+>   `dropDraggedIntoFolder(key, targetFolderId)`に置き換え、`hoverFolderTimer`による待ち時間と
+>   ドラッグ継続処理（`beginDrag`の再呼び出し・ポインターキャプチャの張り直し）は不要になり廃止した。
+>   以下の2026/09の記述のうち`autoOpenFolderDuringDrag`・0.65秒タイマーに触れている部分は、この変更前の経緯。
 > - **2026/09/04**：フォルダ移動が実際にはサーバーへ反映されていなかったバグを
 >   修正（次節`autoOpenFolderDuringDrag`のフォルダ分岐が`guild_id`/`session_token`
 >   を送っておらず、サーバー側`require_login_json`に「missing guild_id」で
@@ -335,62 +341,31 @@ function clearBlockedHover() {
 
 ---
 
-## 5. 掴んだままフォルダに入る：`autoOpenFolderDuringDrag(targetFolderId)`（2672〜2763行）
+## 5. 重ねて離すとフォルダに入る：`dropDraggedIntoFolder(key, targetFolderId)`
 
-これが、この機能の中で最も複雑な処理です。「掴んでいる項目を実際にそのフォルダの中へ移動させ、かつ、そのフォルダを開いた状態にして、しかもドラッグ自体は途切れさせない」という3つを同時にやろうとしています。
+Windowsのエクスプローラーのように、掴んだ項目をフォルダの上に重ねると青枠が出て、指を離すとその中へ入ります。フォルダの中にいるときは、画面上部の「外へ出す」バー（`#folder-exit-dropzone`）に重ねて離すと親フォルダへ移動します。移動してもページは切り替わらず、今の一覧のまま、移動した項目だけが消えます（2026/11/25に変更。以前は自動でフォルダを開いてドラッグを継続する複雑な処理でした）。
 
-1. **データを実際に移動する**：フォルダなら`parentId`を、デッキなら`folderId`を書き換え、それぞれサーバーにも反映します（デッキの場合は`loadDeckCardsWithRecovery`で最新カードを取ってから移動、フォルダなら`楽観的にローカルへ反映してから`サーバーに送る、という違いがあります）。
-   > **★ 2026/09/04 追記（バグ修正）**：このフォルダ側の`save_folder`へのリクエストが
-   > `guild_id`/`session_token`を含めておらず、サーバー側の`require_login_json`に
-   > 「missing guild_id」で常に弾かれていた（＝ローカルの見た目上は移動できたように
-   > 見えても、実際にはサーバーへ一度も反映されていなかった）。前節末尾の追記も参照。
-   > フォルダメニューの「移動」（[02_Cardmaker.js_その2_一覧画面とフォルダ操作.md](02_Cardmaker.js_その2_一覧画面とフォルダ操作.md)の`selectMoveTarget`）側は
-   > 元々`guild_id`/`session_token`を送っていたため、この2つの経路だけ挙動が食い違っていた。
-2. **今のフォルダを切り替える**：`currentFolderId = targetFolderId`とし、`renderDeckListUI()`で画面を作り直します。ただし通常は`cmListDragActive`のガードで再描画がスキップされるため、ここだけ**一時的にガードを外して**（`cmListDragActive = false`にしてから呼び、終わったら元に戻す）強制的に再描画させています。
-3. **ドラッグを継続する**：フォルダを切り替えると`#deck-grid`の中身が丸ごと新しく作り直されるため、それまで掴んでいた`dragEl`（DOM要素）はもう画面から消えています。そこで、同じ`data-key`を持つ**新しく描画された要素**を探し直し（`getItems().find(...)`）、それに対してもう一度`beginDrag`を呼び直すことでドラッグを継続します。
+`endDrag()`の冒頭で、離した瞬間に青枠が出ているか（`hoverFolderEl`があり、かつ見失い猶予待ち＝`hoverClearTimer`ではない）を見て、あれば移動先として控えます。
 
 ```js
-// ★ 追加：フォルダを切り替える直前の「見た目の位置」と、その時点の最新の指の位置を
-//   ここで（＝各種await完了後の最新の状態で）確定させる。デッキ読み込み待ちなどの
-//   非同期処理中に指が動いていた場合でも、ここで最新値を使うことでズレを防ぐ。
-const oldVisualTop = dragEl.getBoundingClientRect().top;
-const resumeClientX = lastClientX;
-const resumeClientY = lastClientY;
-
-// フォルダを開く
-currentFolderId = targetFolderId;
-
-// ★ ドラッグ中は renderDeckListUI() が丸ごとスキップされるため、ここだけ
-//   一時的にガードを外して再描画し、開いたフォルダの中身を表示する。
-const wasDragActive = cmListDragActive;
-cmListDragActive = false;
-renderDeckListUI();
-cmListDragActive = wasDragActive;
-
-const body = document.querySelector('#screen-list .cm-scroll-body');
-if (body) body.scrollTop = 0;
-
-// ★ 再描画で古いdragEl要素はDOMから外れてしまったので、新しく描画された
-//   同じ項目（data-keyで特定）を探し直し、そのままドラッグを継続する。
-const newEl = getItems().find(it => it.dataset.key === key) || null;
-if (newEl) {
-  const newNaturalTop = newEl.getBoundingClientRect().top;
-  const initialDy = oldVisualTop - newNaturalTop;
-  beginDrag(newEl, resumeClientY, initialDy);
-  lastClientX = resumeClientX;
-  try { newEl.setPointerCapture(pressPointerId); } catch (_) {}
-} else {
-  // 万一見つからなければドラッグ状態を安全に終了させる
-  dragEl = null;
-  cmListDragActive = false;
+const dropKey = dragEl.dataset.key;
+const dropTarget = (hoverFolderEl && !hoverClearTimer) ? { id: hoverTargetId } : null;
+clearHoverFolder();
+// …（見た目のリセット）…
+const orderedKeys = getItems().map(it => it.dataset.key).filter(k => !(dropTarget && k === dropKey));
+saveListOrder(currentFolderId, orderedKeys);
+// …
+if (dropTarget) {
+  dropDraggedIntoFolder(dropKey, dropTarget.id)
+    .catch(() => {})
+    .finally(() => renderDeckListUI()); // 移動した項目を現在の一覧から取り除く
 }
 ```
-- 新しく描画された要素は「開いたフォルダの一覧の中の自然な位置」に置かれるだけで、指の位置とは無関係な場所に表示されます。そこで、フォルダ切り替え前の見た目の位置（`oldVisualTop`）と、切り替え後の自然な位置（`newNaturalTop`）の差を`initialDy`として`beginDrag`に渡すことで、**カードが指の位置からずれずにそのまま連続して見える**ように調整しています（3.1節で説明した`beginDrag`の`initialDy`引数がここで使われます）。
+- 移動する項目は並び順の保存対象から外します（元のフォルダの並びに残してしまわないため）。
+- 移動が終わったあと`renderDeckListUI()`で一覧を作り直し、移動した項目を画面から消します。
 
-```js
-try { newEl.setPointerCapture(pressPointerId); } catch (_) {}
-```
-- フォルダの切り替えで要素が作り直されると、それまで張っていたポインターキャプチャ（「この指の動きはこの要素が責任を持って受け取る」という設定）も外れてしまいます。コメントによれば、これを張り直さないと、指がパンくず付近（元の`#deck-grid`の外）に出た瞬間から`pointermove`/`pointerup`が届かなくなり、`endDrag()`が一切呼ばれないまま`touch-action: none`が要素に残り続けて「スクロールも何もできなくなる」不具合につながる、とのことです。
+`dropDraggedIntoFolder`の中身は、データを実際に移動する処理です。フォルダなら`parentId`を、デッキなら`folderId`を書き換え、それぞれサーバーにも反映します（デッキは`loadDeckCardsWithRecovery`で最新カードを取ってから移動、フォルダは楽観的にローカルへ反映してから`save_folder`を送る、という違いがあります）。
+> **★ 2026/09/04 追記（バグ修正）**：フォルダ側の`save_folder`が`guild_id`/`session_token`を送っておらず、サーバー側に常に弾かれていた問題を修正済み（前節末尾の追記も参照）。
 
 ---
 
