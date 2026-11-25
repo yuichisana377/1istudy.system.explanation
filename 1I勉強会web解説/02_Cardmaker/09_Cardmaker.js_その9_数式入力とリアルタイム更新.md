@@ -35,6 +35,8 @@ function findMatchingParen(s, openIdx) {
 - `_(b)`（英字の下付き）を見つけたら、`_{b}`に変換。
 - ベクトルと下付きは、`matchVectorAt`／`matchSubscriptAt`という小さな判定関数で「中身が英数字（ベクトルは`'`と`_(1)`も可）だけか」を確かめてから変換します。`反応→(加熱)`や`snake_case(x)`のような普通の文章まで数式にしてしまわないための安全策です。
 - **中身（ルートの中・分数の分子/分母）も、もし数式が入っていれば再帰的に同じ変換をかける**（`simpleMathToLatexRaw`が自分自身をもう一度呼び出している部分）。これにより「ルートの中に分数がある」のような入れ子の数式も正しく変換できます。
+- `²`・`₂`・`⁽ⁿ⁺¹⁾`のような**Unicodeの上付き・下付き文字**は、`matchUniSupSubAt`が連続する同じ種類をまとめて`{}^{23}`／`{}_{2}`（KaTeXの上付き・下付き）に変換します。`¹²³`と`⁴〜⁹`は別フォントで描画されて高さがバラつくため、描画時だけKaTeXに任せて高さを揃えるための処理です。保存データはUnicode文字のままです。
+- 旧形式の生LaTeX`\(...\)`は、中身を一切変換せずそのまま通します（変換すると`\(`が入れ子になりKaTeXがエラーを出すため）。
 - 該当しない部分の文字はそのままコピーします（`out += s[i]`）。
 
 2つの関数の違いは、外側の`simpleMathToLatex`だけが変換結果を`\( ... \)`（KaTeXが「ここは数式です」と認識するための区切り記号）で囲む点です。内側（`simpleMathToLatexRaw`）で同じ区切り記号を付けてしまうと、KaTeXの引数の中に区切り記号が紛れ込んで表示が壊れてしまうため、あえて区切り記号を付けない「素の」変換として別に用意されています。
@@ -42,7 +44,7 @@ function findMatchingParen(s, openIdx) {
 ```js
 function setMathText(el, raw) {
   if (!el) return;
-  el.textContent = simpleMathToLatex(raw || '');
+  el.textContent = window.renderMathInElement ? simpleMathToLatex(raw || '') : (raw || '');
   if (window.renderMathInElement) {
     try {
       renderMathInElement(el, { delimiters: [{ left: '\\(', right: '\\)', display: false }], throwOnError: false });
@@ -51,7 +53,7 @@ function setMathText(el, raw) {
 }
 ```
 - まず変換結果をプレーンテキストとして要素に入れ、そのあとKaTeX（`renderMathInElement`、[00_HTML構造とページ全体像.md](00_HTML構造とページ全体像.md)で触れた外部ライブラリ）に「`\(`〜`\)`で囲まれた部分だけを数式として描画してください」とお願いします。
-- `window.renderMathInElement`が存在するかを毎回チェックしているのは、外部CDNからの読み込みに失敗した場合（オフラインなど）でも、その場合はただのテキストとして表示され続け、ページ全体が壊れないようにするためです。
+- `window.renderMathInElement`が存在するかを毎回チェックしているのは、外部CDNからの読み込みに失敗した場合（オフラインなど）でも、その場合は変換前の文字列をそのまま表示し（変換後の`\(...\)`が生で見えてしまわないように）、ページ全体が壊れないようにするためです。
 
 ---
 
