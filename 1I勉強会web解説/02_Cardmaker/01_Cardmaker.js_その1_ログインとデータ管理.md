@@ -86,13 +86,13 @@ function genId() { return Date.now().toString(36) + Math.random().toString(36).s
 const FOLDER_CACHE_KEY = 'cardmaker_folders_cache_v1';
 function loadFoldersCache() { try { return JSON.parse(localStorage.getItem(FOLDER_CACHE_KEY)) || []; } catch { return []; } }
 function saveFoldersCache(f) { localStorage.setItem(FOLDER_CACHE_KEY, JSON.stringify(f)); }
-const MAX_FOLDER_DEPTH = 3;
+const MAX_FOLDER_DEPTH = 10;
 const QUIZ_ARCHIVE_FOLDER_ID = "quiz_archive_root";
 let folders = loadFoldersCache();
 let currentFolderId = null; // null = ルート
 ```
 - コメントにある通り、フォルダの「本体」はサーバー側（GitHub上の`folders.json`、みんなで共有）にあります。ここでの`localStorage`保存は、あくまで「サーバーから最新版が届くまでの間、画面が真っ白にならないよう、前回取得した内容をとりあえず表示しておくためのキャッシュ」です。
-- `MAX_FOLDER_DEPTH = 3`：フォルダは最大3階層まで。
+- `MAX_FOLDER_DEPTH = 3`：フォルダは最大10階層まで。
 - `QUIZ_ARCHIVE_FOLDER_ID`：「クイズ過去問」という特別なフォルダのID。これはBotのサーバー側と同じ固定値で、名前変更・削除・移動ができない「システムフォルダ」として扱われます（後述のガード処理で保護されています）。
 - `currentFolderId`：今どのフォルダの中を見ているか（`null`なら一番上の階層＝ホーム）。
 
@@ -267,7 +267,7 @@ function canMoveDeckTo(deckId, targetFolderId) {
 - `folderChildren(parentId)`：あるフォルダの直下の子フォルダ一覧（名前順にソート）。
 - `folderDescendants(id)`：あるフォルダの配下すべて（子・孫…を再帰的に集める）。
 - `maxLevelInSubtree(id)`：あるフォルダとその配下の中で、一番深い階層がどこまであるか。
-- `canMoveFolderTo(folderId, newParentId)`：あるフォルダを別の場所に移動できるかどうかの判定。「自分自身の中には移動できない」「クイズ過去問フォルダ自体は動かせない」「移動先が自分の子孫だと循環してしまうのでNG」「移動すると3階層を超えてしまう場合はNG」「クイズ過去問フォルダの中身はその外に出せない」という複数の条件をチェックしています。
+- `canMoveFolderTo(folderId, newParentId)`：あるフォルダを別の場所に移動できるかどうかの判定。「自分自身の中には移動できない」「クイズ過去問フォルダ自体は動かせない」「移動先が自分の子孫だと循環してしまうのでNG」「移動すると10階層を超えてしまう場合はNG」「クイズ過去問フォルダの中身はその外に出せない」という複数の条件をチェックしています。
 - `countDecksRecursive(folderId)`／`countCardsRecursive(folderId)`：あるフォルダ配下（サブフォルダ含む）の合計デッキ数・合計カード数。
 - `countUnsureRecursive(folderId)`：あるフォルダ配下の「わからない」マークが付いたカードの合計数。まだカード本体を読み込んでいないデッキは数えられないのでスキップする、という注意書きがあります。
 - `collectDecksInFolder(folderId)`：あるフォルダ配下の全デッキを1つの配列に集める。

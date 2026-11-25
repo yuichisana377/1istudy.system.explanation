@@ -328,7 +328,7 @@ function clearBlockedHover() {
 >   `dragEl.getBoundingClientRect().top`（＝カード自身の見た目の上端）に変更し、
 >   カードが隠れ始めるのとほぼ同時に反応するようにした。
 > - **2026/09/05（無効な移動先への赤枠）**：`canMoveFolderTo`/`canMoveDeckTo`が
->   `false`を返すケース（例：フォルダの階層が上限の3階層に達している）に重ねても
+>   `false`を返すケース（例：フォルダの階層が上限の10階層に達している）に重ねても
 >   従来は何も起きなかった（＝反応していないだけに見えた）ため、`applyBlockedHoverTarget`/
 >   `clearBlockedHover`を新設し、赤枠で「ここには移動できない」ことを示すようにした
 >   （自動では開かない。青枠＝`hoverFolderEl`の「開けるホバー」とは別の独立した状態）。

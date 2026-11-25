@@ -571,7 +571,7 @@ async function chooseNewFolder() {
   openFolderNameModal('create', null);
 }
 ```
-右下の＋ボタン →「新しいデッキを作成」または「新しいフォルダを作成」の選択メニューです。フォルダ作成を選ぶと、まず`folderLevel(currentFolderId) >= MAX_FOLDER_DEPTH`（3階層制限）をチェックし、超えていれば作成できない旨のアラートを出します。デッキ作成（`chooseNewDeck`）は[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)で説明する`openNewSet()`を呼ぶだけです。
+右下の＋ボタン →「新しいデッキを作成」または「新しいフォルダを作成」の選択メニューです。フォルダ作成を選ぶと、まず`folderLevel(currentFolderId) >= MAX_FOLDER_DEPTH`（10階層制限）をチェックし、超えていれば作成できない旨のアラートを出します。デッキ作成（`chooseNewDeck`）は[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)で説明する`openNewSet()`を呼ぶだけです。
 
 ### 5.3 フォルダ名の入力（1291〜1324行）
 ```js

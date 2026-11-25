@@ -6,7 +6,7 @@
 
 ```python
 FOLDERS_FILE = "folders.json"
-MAX_FOLDER_DEPTH = 3
+MAX_FOLDER_DEPTH = 10
 
 def load_card_folders():
     data, sha = local_get(FOLDERS_FILE)
@@ -19,7 +19,7 @@ def save_card_folders(folders, sha=None):
     notify_change()
 ```
 - `folders.json`は`[{id, name, parent_id, description}, ...]`という**フラットな配列**でフォルダの階層構造を表現します。各フォルダは自分の`parent_id`（親フォルダのID。最上位なら`None`）だけを知っており、木構造そのもの（親から子への逆参照リストなど）は持っていません。木構造の解釈は、これから見る関数群が配列全体を毎回走査することで行います。`description`（★ 追加、任意）はユーザーがフォルダの中身をメモできる自由記述欄で、フォルダ自体の階層構造とは無関係な付随情報です。
-- `MAX_FOLDER_DEPTH = 3`… フォルダは最大3階層までしか作れません。
+- `MAX_FOLDER_DEPTH = 10`… フォルダは最大10階層までしか作れません。
 
 ```python
 def _folders_text(folders):
@@ -87,7 +87,7 @@ def _can_move_folder_to(folders, folder_id, new_parent_id):
 ```
 - **これが移動操作の安全性を保証する、最も重要な関数です**。あるフォルダを新しい親（`new_parent_id`）の下に移動できるかどうかを判定します。2つの異なる問題を防いでいます。
   1. **循環参照の防止**：`if new_parent_id and new_parent_id in desc_ids: return False`。もし「自分の子孫」を自分の新しい親にしてしまうと、親子関係がループしてしまい（例えば、Aフォルダの中にBフォルダがあるのに、AをBの中に移動してしまう）、木構造そのものが壊れてしまいます。`_folder_descendants`で調べた自分の子孫一覧に、移動先が含まれていないかを確認しています。`folder_id == new_parent_id`（自分自身を自分の親にしようとする、最も単純な循環）も別途チェックしています。
-  2. **深さ制限の超過防止**：`shift = new_level - old_level`（移動によって、階層の深さが何段変化するか）を計算し、`_max_level_in_subtree`（移動するフォルダの、今のサブツリー全体の最大の深さ）に`shift`を足した結果が、`MAX_FOLDER_DEPTH`（3）を超えないかを確認します。**これが重要な理由は、移動するフォルダ自身の深さだけでなく、その中に入っている子孫フォルダの深さも一緒に動く**ためです。もし1階層のフォルダを、既に2階層目にある別のフォルダの下に移動しようとしたら、そのフォルダの中に3階層目の孫フォルダがあった場合、移動後には4階層目になってしまい、制限を超えてしまいます。この関数は、移動対象のサブツリー全体を考慮して、この超過を未然に防ぎます。
+  2. **深さ制限の超過防止**：`shift = new_level - old_level`（移動によって、階層の深さが何段変化するか）を計算し、`_max_level_in_subtree`（移動するフォルダの、今のサブツリー全体の最大の深さ）に`shift`を足した結果が、`MAX_FOLDER_DEPTH`（10）を超えないかを確認します。**これが重要な理由は、移動するフォルダ自身の深さだけでなく、その中に入っている子孫フォルダの深さも一緒に動く**ためです。もし1階層のフォルダを、既に10階層目にある別のフォルダの下に移動しようとしたら、そのフォルダの中に10階層目の孫フォルダがあった場合、移動後には11階層目になってしまい、制限を超えてしまいます。この関数は、移動対象のサブツリー全体を考慮して、この超過を未然に防ぎます。
 
 ```python
 def generate_folder_id():
@@ -198,7 +198,7 @@ def save_folder():
                 return jsonify({"ok": False, "error": "このフォルダは変更できません"})
             if parent_id != target.get("parent_id"):
                 if not _can_move_folder_to(folders, folder_id, parent_id):
-                    return jsonify({"ok": False, "error": "移動できません（3階層を超える、または循環参照）"})
+                    return jsonify({"ok": False, "error": f"移動できません（{MAX_FOLDER_DEPTH}階層を超える、または循環参照）"})
                 # ★「クイズ過去問」フォルダの中身は、その外へ移動できない
                 if _is_in_archive_scope(folders, folder_id) and not _is_in_archive_scope(folders, parent_id):
                     return jsonify({"ok": False, "error": "クイズ過去問フォルダの外には移動できません"})
