@@ -198,8 +198,10 @@ function checkHoverFolder(clientX, clientY) {
   // ① まず「一覧の上端まで持ち上げたら親フォルダへ戻る」ゾーンを判定する
   //   （フォルダの中にいる時だけ。ルート表示中は戻り先が無いので対象外）
   const exitZone = getExitZoneRect();
-  // 指がバーの下40pxまで来た（ただし掴んだ位置から上へ実際に動かした時だけ）、またはカード上端がバー下端に届いたら「外へ出す」
-  if (exitZone && ((clientY <= exitZone.bottom + EXIT_ZONE_MARGIN_PX && clientY < dragOriginY - EDGE_ARM_PX)
+  // バーは一覧に重ねて表示（一覧は押し下がらない）。掴んだ位置から上へ動かした時だけ、
+  // 指がバーの下40pxまで来る／カード上端がバー下端に届くと「外へ出す」
+  const movedUp = clientY < dragOriginY - EDGE_ARM_PX;
+  if (exitZone && movedUp && (clientY <= exitZone.bottom + EXIT_ZONE_MARGIN_PX
       || dragEl.getBoundingClientRect().top <= exitZone.bottom)) {
     const parentFolder = folders.find(f => f.id === currentFolderId);
     const parentId = parentFolder ? (parentFolder.parentId ?? null) : null;
@@ -304,7 +306,7 @@ function clearBlockedHover() {
 - 無効な移動先（後述）には赤枠（`hoverBlockedEl`）で「開けるホバー」とは別の状態を示します。2つの状態は独立していて、どちらへ切り替わるときも相手側を消してから自分を立てる、という対称的な構造になっています。
 
 > **★ この節の変更履歴（初版からの主な変更点）**
-> - **2026/11/25（パンくずまで含める）**：パンくずが見えている時は、指がパンくずの下端まで来ても「外へ出す」とみなす（`zoneLimit`）。
+> - **2026/11/25（バーを一覧に重ねる）**：「外へ出す」バーが通常配置だと、ドラッグ開始時に一覧が約60px押し下がり指とカードがずれ、判定も狂っていた。バーを重ね表示（高さ60px・マイナスマージン）にして一覧が動かないようにし、判定は全経路で「上へ動かした時だけ」に統一した。さらに、+40pxの余白は一覧が先頭にある時だけ有効にし、上向き自動スクロールの帯はバーの下端から数えるようにした（スクロール中に常に青枠が出るのを防ぐ）。（直前に試したパンくず下端まで含める案は、通常の並び替えで誤って外へ出る恐れがあるため取り下げた）
 > - **2026/11/25（「外へ出す」を出しやすく）**：バーの下に余白（`EXIT_ZONE_MARGIN_PX`=40px）を足して指の位置でも判定するようにし（掴んだ位置から上へ動かした時だけ有効。バー表示で一覧が押し下がり、掴んだ直後に誤反応するのを防ぐため）、
 >   バー自体も少し高くした。カードをバーの下端まで持ち上げなくても外へ出せる。
 > - **2026/11/25（Windows風の「重ねて離す」方式に変更）**：フォルダに重ねて待つと自動で開いて
