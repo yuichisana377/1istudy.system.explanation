@@ -198,7 +198,9 @@ function checkHoverFolder(clientX, clientY) {
   // ① まず「一覧の上端まで持ち上げたら親フォルダへ戻る」ゾーンを判定する
   //   （フォルダの中にいる時だけ。ルート表示中は戻り先が無いので対象外）
   const exitZone = getExitZoneRect();
-  if (exitZone && dragEl.getBoundingClientRect().top <= exitZone.bottom) {
+  // 指がバー（＋下の余白56px）に入った、またはカード上端がバーの少し手前に来たら「外へ出す」
+  if (exitZone && (clientY <= exitZone.bottom + EXIT_ZONE_MARGIN_PX
+      || dragEl.getBoundingClientRect().top <= exitZone.bottom + EXIT_ZONE_MARGIN_PX / 2)) {
     const parentFolder = folders.find(f => f.id === currentFolderId);
     const parentId = parentFolder ? (parentFolder.parentId ?? null) : null;
     const dragKey = dragEl.dataset.key;
@@ -302,6 +304,8 @@ function clearBlockedHover() {
 - 無効な移動先（後述）には赤枠（`hoverBlockedEl`）で「開けるホバー」とは別の状態を示します。2つの状態は独立していて、どちらへ切り替わるときも相手側を消してから自分を立てる、という対称的な構造になっています。
 
 > **★ この節の変更履歴（初版からの主な変更点）**
+> - **2026/11/25（「外へ出す」を出しやすく）**：バーの下に余白（`EXIT_ZONE_MARGIN_PX`=56px）を足して指の位置でも判定するようにし、
+>   バー自体も少し高くした。カードをバーの下端まで持ち上げなくても外へ出せる。
 > - **2026/11/25（Windows風の「重ねて離す」方式に変更）**：フォルダに重ねて待つと自動で開いて
 >   ページごと移動する方式をやめ、重ねると青枠→離すとそのフォルダの中へ入る方式にした。
 >   ページは切り替わらず、移動した項目だけが現在の一覧から消える。`autoOpenFolderDuringDrag`は
