@@ -213,9 +213,11 @@ function refreshStudyCardDisplay(c) {
 
 ```js
 let renamingDeckId = null;
-async function openRename(id) {
-  renamingDeckId = id;
+async function openRename(id, fromEdit) {
   const deck = decks.find(d => d.id === id);
+  if (!deck) return;   // ★ 追加：編集中に裏の同期でデッキが消えた場合
+  renamingDeckId = id;
+  renamingFromEdit = !!fromEdit;
   const currentSubject = deck.subject || '';
   const currentName = currentSubject && deck.name.startsWith(currentSubject + ' ')
     ? deck.name.slice(currentSubject.length + 1) : deck.name;
@@ -257,6 +259,7 @@ async function openRename(id) {
 - 科目名（`select`欄）はサーバーの`channels`から取得しますが、失敗した場合は現在の科目名（`currentSubject`）だけを選択肢として表示します。`currentSubject`はデッキ作成者が自由に設定できる文字列なので、`esc()`を通さずに`innerHTML`へ入れると保存型XSSになる、という点にコメントで注意が促されています。
 
 ```js
+let renamingFromEdit = false; // ★ 追加：編集画面のヘッダーから開いたか（openRename(id, true)）
 async function saveRename() {
   const subject = document.getElementById('modal-rename-subject').value;
   const input   = document.getElementById('modal-rename-input').value.trim();
@@ -269,7 +272,7 @@ async function saveRename() {
   // ★ 追加：まだサーバー未登録のデッキのみ、公開予定トグルの変更を反映する
   const wasPlanPublish = deck.planPublish !== false;
   let planPublishChanged = false;
-  if (!deck.filename) {
+  if (!deck.filename && !renamingFromEdit) {
     const nowPlanPublish = document.getElementById('modal-rename-plan-publish').checked;
     if (nowPlanPublish !== wasPlanPublish) planPublishChanged = true;
     deck.planPublish = nowPlanPublish;
@@ -280,6 +283,13 @@ async function saveRename() {
   saveDecks(decks);
   closeModal('modal-rename');
   renderDeckListUI();
+  // ★ 追加：編集画面のヘッダー（デッキ名・説明欄）にも即反映する
+  const editingThis = renamingFromEdit && currentDeckId === deck.id;
+  if (currentDeckId === deck.id) {
+    document.getElementById('edit-deck-title').textContent = deck.name;
+    const dBox = document.getElementById('edit-deck-desc');
+    if (dBox) { dBox.textContent = deck.description || ''; dBox.style.display = deck.description ? '' : 'none'; }
+  }
 
   // ★ 追加：公開予定が「なし→あり」に変わった場合、この時点でサーバーへ登録し、
   //   他の人の一覧にも「作成中」として表示されるようにする。
@@ -296,6 +306,13 @@ async function saveRename() {
   //   ★ 修正：cardsLoaded=true のキャッシュがあっても古い可能性があるため必ず
   //     最新化する。失敗時も loadDeckCardsWithRecovery が回復手段を提示するので、
   //     rename操作だけがずっとできなくなる、ということはない。
+  if (deck.filename && editingThis) {
+    // 編集画面から変更した場合は取り直さない（通信中に追加したカードが上書きで消えるため）。
+    await waitForPendingSync(deck.id);
+    const ok = await queueSyncDeckToServer(decks.find(d => d.id === deck.id) || deck);
+    if (!ok) showBanner('サーバーへの名前変更の反映に失敗しました', '#fffbeb', '#92400e', Icons.html('warning', {size:15}));
+    return;
+  }
   if (deck.filename) {
     // ★ 追加：この直後の強制リロードでローカルの変更（追加/削除など未同期分）が
     //   消えてしまわないよう、まず直前の同期処理が終わるのを待つ。
@@ -310,6 +327,7 @@ async function saveRename() {
   }
 }
 ```
+- **編集画面のヘッダーのデッキ名をタップして開いた場合**（`openRename(currentDeckId, true)`）は、サーバーからのカード取り直しを行わず、手元の最新カードをそのまま順番待ちの同期で送ります。取り直しの通信中に「次へ」で追加したカードが、古い取得結果で上書きされて消えるのを防ぐためです。また、編集画面のボタン表示は開いた時点の登録状態で決まっているため、この経路では「公開予定」トグルは使えません。デッキが一覧から消えていた場合は `openRename` が何もせず戻ります。
 - 「公開予定」が新たにONにされた場合、この時点でサーバーに先行登録します（[03_Cardmaker.js_その3_デッキの読み込みと作成編集.md](03_Cardmaker.js_その3_デッキの読み込みと作成編集.md)の`announceNewDeckToServer`）。
 - すでに公開済みのデッキの名前を変えるときは、コメントにある通り注意が必要です：サーバーの`save_cards`は「カードを丸ごと上書きする」仕様なので、名前だけ変えたいつもりでも、もしカード本体が未読み込みのまま送ってしまうと、サーバー側のカードが空っぽで上書きされてしまいます。そのため、名前変更の前に必ずカード本体を最新化してから送信しています。
 
