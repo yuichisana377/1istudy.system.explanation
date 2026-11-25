@@ -92,7 +92,7 @@ let folders = loadFoldersCache();
 let currentFolderId = null; // null = ルート
 ```
 - コメントにある通り、フォルダの「本体」はサーバー側（GitHub上の`folders.json`、みんなで共有）にあります。ここでの`localStorage`保存は、あくまで「サーバーから最新版が届くまでの間、画面が真っ白にならないよう、前回取得した内容をとりあえず表示しておくためのキャッシュ」です。
-- `MAX_FOLDER_DEPTH = 3`：フォルダは最大10階層まで。
+- `MAX_FOLDER_DEPTH = 10`：フォルダは最大10階層まで。
 - `QUIZ_ARCHIVE_FOLDER_ID`：「クイズ過去問」という特別なフォルダのID。これはBotのサーバー側と同じ固定値で、名前変更・削除・移動ができない「システムフォルダ」として扱われます（後述のガード処理で保護されています）。
 - `currentFolderId`：今どのフォルダの中を見ているか（`null`なら一番上の階層＝ホーム）。
 

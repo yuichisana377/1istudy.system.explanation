@@ -756,7 +756,7 @@ function renderMovePickerList() {
       + (isCurrent ? ' current' : '');
     const idAttr = r.id === null ? 'null' : `'${r.id}'`;
     const clickAttr = r.disabled ? '' : ` onclick="selectMoveTarget(${idAttr})"`;
-    return `<div class="${cls}" style="padding-left:${8 + r.level * 18}px"${clickAttr}>${r.icon} ${esc(r.label)}${isCurrent ? ' <span class="move-picker-current-tag">現在</span>' : ''}</div>`;
+    return `<div class="${cls}" style="padding-left:${8 + Math.min(r.level, 6) * 18}px"${clickAttr}>${r.icon} ${esc(r.label)}${isCurrent ? ' <span class="move-picker-current-tag">現在</span>' : ''}</div>`;
   }).join('');
 }
 ```
