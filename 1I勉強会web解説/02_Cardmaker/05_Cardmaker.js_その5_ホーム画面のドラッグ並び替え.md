@@ -117,7 +117,7 @@ function beginDrag(item, clientY, initialDy) {
 }
 ```
 - 掴んだカードに影を付けて少し浮かせ、わずかに拡大表示（`scale(1.02)`）して「今これを掴んでいます」と分かるようにします。対応端末では12ミリ秒の短い振動も鳴らします。
-- `initialDy`という引数は普段は0ですが、後述の「フォルダを自動で開いて掴んだままドラッグを続ける」処理（5節）のときだけ、指の位置とカードの見た目がずれないようにするための補正値として使われます。
+- `initialDy`という引数は、以前は「フォルダを自動で開いて掴んだままドラッグを続ける」処理のための補正値でした。2026/11/25にその処理を廃止したため、現在は常に0（渡されない）で、使われない引数として残っています（5節参照）。
 
 ### 3.2 `moveDrag(clientX, clientY)`（2544〜2576行）— 指が動くたびに呼ばれる
 ```js
@@ -349,19 +349,24 @@ Windowsのエクスプローラーのように、掴んだ項目をフォルダ�
 
 ```js
 const dropKey = dragEl.dataset.key;
-const dropTarget = (hoverFolderEl && !hoverClearTimer) ? { id: hoverTargetId } : null;
+// allowDrop=false は pointercancel。この場合は移動しない
+const dropTarget = (allowDrop && hoverFolderEl && !hoverClearTimer) ? { id: hoverTargetId } : null;
 clearHoverFolder();
 // …（見た目のリセット）…
 const orderedKeys = getItems().map(it => it.dataset.key).filter(k => !(dropTarget && k === dropKey));
-saveListOrder(currentFolderId, orderedKeys);
+const saveOrderNow = () => saveListOrder(orderFolderId, orderedKeys);
+if (!dropTarget) saveOrderNow();   // 移動しない通常の並び替えは、その場で確定する
 // …
 if (dropTarget) {
   dropDraggedIntoFolder(dropKey, dropTarget.id)
-    .catch(() => {})
+    .then(moved => { if (moved) { saveOrderNow(); pushOrder(); } })   // 成功してから並び順を確定
+    .catch(() => showBanner('フォルダへの移動に失敗しました', …))
     .finally(() => renderDeckListUI()); // 移動した項目を現在の一覧から取り除く
 }
 ```
 - 移動する項目は並び順の保存対象から外します（元のフォルダの並びに残してしまわないため）。
+- **並び順は、移動が成功してから確定します**（`dropDraggedIntoFolder`が`true`を返したときだけ`saveOrderNow`/`pushOrder`）。デッキ読み込みで「やめる」を選んだ・通信に失敗した場合は、並び順が変わらないので、項目が末尾へ飛ぶことはありません。
+- **`pointercancel`では移動しません**（`endDrag(allowDrop)`）。iOSの上端ジェスチャーなどで操作が中断されたときに、意図せずデータが動かないようにするためです。`onPointerUp`が`e.type`で見分けて渡します。
 - 移動が終わったあと`renderDeckListUI()`で一覧を作り直し、移動した項目を画面から消します。
 
 `dropDraggedIntoFolder`の中身は、データを実際に移動する処理です。フォルダなら`parentId`を、デッキなら`folderId`を書き換え、それぞれサーバーにも反映します（デッキは`loadDeckCardsWithRecovery`で最新カードを取ってから移動、フォルダは楽観的にローカルへ反映してから`save_folder`を送る、という違いがあります）。
@@ -392,7 +397,8 @@ grid.addEventListener('touchmove', onNativeTouchMove, { passive: false });
 
 ```js
 function onPointerUp(e) {
-  if (dragEl && e.pointerId === pressPointerId) { endDrag(); cancelPress(); resetTouchAction(); return; }
+  // ★ pointercancel（システムジェスチャー等による中断）のときはフォルダへの移動をしない
+  if (dragEl && e.pointerId === pressPointerId) { endDrag(e.type !== 'pointercancel'); cancelPress(); resetTouchAction(); return; }
   if (e.pointerId === pressPointerId) { cancelPress(); resetTouchAction(); return; }
   if (e.pointerId === manualScrollPointerId) { resetTouchAction(); }
 }
