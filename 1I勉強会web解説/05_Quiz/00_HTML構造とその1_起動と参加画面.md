@@ -264,3 +264,10 @@ function quizErrorText(code) {
 ---
 
 続きは[01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md](01_Quiz.js_その1_ホストのセットアップとCSV読み込み.md)で、ホストのクイズ作成画面（デッキ選択・手動作成・CSV読み込み・ルーム作成）を解説します。
+
+## 追記：参加URLとゲスト参加（2026/11/25）
+
+- ホストのロビー画面に参加URLの表示とコピーボタン（`joinUrlFor`/`copyJoinUrl`）を追加。
+- `?code=&g=` 付きで開かれたとき、この端末がそのサーバーでログイン済みなら従来どおり参加、そうでなければ `LINK_AS_GUEST` としてログイン画面へ飛ばさず `screen-guest-join`（ニックネーム入力）を出す（`startGuestFlow`/`submitGuestJoin`）。
+- ゲストトークンは `sessionStorage`（キー `quizGuest:コード`）に保存し、再読み込みしても同じ参加者に復帰する。通信エラーのときはトークンを消さない。
+- ゲストにはホーム画面が無いので、終了後は `screen-guest-end`（ログインへの案内）を表示する。
