@@ -2,16 +2,32 @@
 
 対象：`bot.py`の`_quiz_room_players_json`・`_quiz_room_snapshot`・`_pick_distractors`・`_build_deck_questions`・`_validate_manual_questions`・`_archive_manual_quiz`・`_archive_room_if_needed`。
 
-## 1. 参加者一覧の整形：`_quiz_room_players_json`（4877〜4896行）
+## 1. 参加者一覧の整形：`_quiz_room_players_json`（7507〜7522行）
 
 ```python
 def _quiz_room_players_json(room):
-    players = sorted(room["players"].values(), key=lambda p: (-p["score"], p.get("total_answer_time", 0.0)))
+    """スコア順（全体順位）の一覧。同点の場合は、それまでの回答時間の合計
+    （total_answer_time）が短い方＝素早く押せていた方を上位にする。
+    ロビー・"ranking"（途中経過）画面・最終結果("ended")で使う共通の並び順。"""
+    players = sorted(room["players"].values(), key=lambda p: _quiz_rank_key(room, p))
+    # 同点時の順位決めに使った回答時間も一緒に返して順位表に出す
+    # （平均点モードでは1問あたりの平均、それ以外は合計。単位はクライアントに渡す）
+    time_unit = "秒/問" if room.get("score_mode") == "average" else "秒"
     return [
-        {"id": p["id"], "nickname": p["nickname"], "color": p["color"], "text_color": p["text_color"], "score": p["score"]}
+        {
+            "id": p["id"],
+            "nickname": p["nickname"],
+            "color": p["color"],
+            "text_color": p["text_color"],
+            "score": _quiz_display_score(room, p),
+            "score_unit": _quiz_score_unit(room),
+            "time_sec": round(_quiz_rank_key(room, p)[1], 1),
+            "time_unit": time_unit,
+        }
         for p in players
     ]
 ```
+- ★ 追加：`time_sec`・`time_unit`は、同点のときの順位決めに使った「回答にかかった時間」（`_quiz_rank_key`の2要素目。通常は合計秒数、平均点モードでは1問あたりの平均秒数）です。途中経過・最終結果の順位表に、点数の左隣へ小さく表示されます（同点でも順位の理由が見えるように）。
 - `sorted(..., key=lambda p: (-p["score"], p.get("total_answer_time", 0.0)))`… スコアの**降順**（マイナスを付けることで、通常は昇順のソートを降順に反転させています）で並べ、順位表として使えるようにします。**★ 追加**：タプルの2要素目`total_answer_time`（それまでに回答にかかった時間の合計。押すのが早いほど小さい値）が、スコアが同点だったときのタイブレークです。Pythonのタプル比較は左から順に評価されるため、まず`-p["score"]`（スコア降順）で決着が付き、それでも同じ場合だけ`total_answer_time`（昇順＝速い方が上）で決まります。この一覧はロビー・`"ranking"`（途中経過）画面・最終結果(`"ended"`)で使う「全体順位」です。
 - 以前はこの関数に`include_correct`引数があり、`True`のとき各参加者の「今回の問題に正解したか」まで含めていましたが、**この役割は下記の`_quiz_room_players_json_press_order`という別関数に分離されました**（全体順位の並び順と、reveal中のミニ順位表の並び順が別物になったため。詳しくは次項）。
 
@@ -19,18 +35,29 @@ def _quiz_room_players_json(room):
 
 ```python
 def _quiz_room_players_json_press_order(room):
+    """正解発表(reveal)中のミニ順位表専用：全体スコア順ではなく、
+    「今回の問題に回答したのが早い順（正誤にかかわらず）」で並べる
+    （Kahoot風の演出。全体順位は"ranking"画面・最終結果の方で見せる）。
+    時間切れで未回答の人は末尾にまとめ、その中はスコア順で安定させる。"""
     def sort_key(p):
         answered_at = p.get("cur_answered_at")
         if answered_at is not None:
             return (0, answered_at)
-        return (1, -p["score"])
+        return (1, -_quiz_display_score(room, p, raw=True))
     players = sorted(room["players"].values(), key=sort_key)
     result = []
     for p in players:
+        # ★ 出題中(question)にこれを渡すと、まだ発表前の正誤がバレてしまうため、
+        #   この関数自体をrevealのときにしか呼ばない設計にしてある。
         answered = p["cur_answer"] is not None
         result.append({
-            "id": p["id"], "nickname": p["nickname"], "color": p["color"], "text_color": p["text_color"],
-            "score": p["score"], "answered": answered,
+            "id": p["id"],
+            "nickname": p["nickname"],
+            "color": p["color"],
+            "text_color": p["text_color"],
+            "score": _quiz_display_score(room, p),
+            "score_unit": _quiz_score_unit(room),
+            "answered": answered,
             "correct": bool(p["cur_correct"]) if answered else None,
         })
     return result
@@ -38,17 +65,32 @@ def _quiz_room_players_json_press_order(room):
 - 正解発表(reveal)中のミニ順位表だけは、全体スコア順ではなく**「その問題に回答したのが早い順（正誤にかかわらず）」**で見せる、というKahoot風の演出の実装です。`sort_key`が返すタプルの1要素目（`0`か`1`）で「回答済みグループ」と「未回答（時間切れ）グループ」に大きく分け、回答済みグループの中では`cur_answered_at`（回答した時刻）の昇順＝早押し順、未回答グループの中はスコア降順で安定させています。
 - `include_correct`（各参加者の今回の問題への正誤）は、この関数を呼ぶこと自体が「reveal中」であることを前提にしているため常に含めます。以前のように呼び出し側が`True`/`False`を選ぶ必要はなくなりました（この関数自体をreveal以外から呼ばない、という規律に一本化されています）。
 
-## 2. ルーム状態のスナップショット：`_quiz_room_snapshot`（4898〜4951行）
+## 2. ルーム状態のスナップショット：`_quiz_room_snapshot`（7552〜7649行）
 
 これは、フロント側がポーリングで受け取る、その時点でのルームの状態全体です。**`state`の値によって、含まれる情報が意図的に変わります**。
 
 ```python
 def _quiz_room_snapshot(room, student_id):
+    snap = _quiz_room_snapshot_raw(room, student_id)
+    if _is_guest_id(student_id):
+        # ★ ゲスト（ログインしていない人）には他の参加者の学籍番号を渡さない。自分以外のidは
+        #   このルーム内だけで通用する不透明な値に置き換える（フロントは「自分の行か」の比較にしか使わない）。
+        def _mask(pid):
+            if pid == student_id:
+                return pid
+            return "p:" + hmac.new(SESSION_SECRET.encode(), (room["code"] + "|" + str(pid)).encode(), hashlib.sha256).hexdigest()[:10]
+        for key in ("players",):
+            for p in snap.get(key) or []:
+                p["id"] = _mask(p.get("id"))
+    return snap
+
+def _quiz_room_snapshot_raw(room, student_id):
     snap = {
         "code": room["code"],
         "title": room["title"],
         "state": room["state"],
         "host_nickname": room["host_nickname"],
+        "score_mode": room.get("score_mode", "total"),
         "players": _quiz_room_players_json(room),
     }
     if room["state"] == "countdown":
@@ -66,6 +108,8 @@ def _quiz_room_snapshot(room, student_id):
             "total_questions": len(room["questions"]),
             "intro_started_at": room["intro_started_at"],
             "intro_duration_sec": QUIZ_INTRO_DURATION_SEC,
+            # ★ 追加：ボーナス問題なら「第N問」の時点から予告する（盛り上げるため）
+            "is_bonus": room["current_q"] in room.get("bonus_indices", set()),
         })
 ```
 - `"intro"`（「第N問」を見せている段階）では、**まだ問題文や選択肢自体を渡していません**。コメントにある通り「question状態になってから渡せば十分で、渡す情報は少ない方がよい」という、最小限の情報しか渡さない方針です。
@@ -88,20 +132,18 @@ def _quiz_room_snapshot(room, student_id):
     elif room["state"] in ("question", "reveal"):
         q = room["questions"][room["current_q"]]
         revealed = room["state"] == "reveal"
-        question_payload = {"question": q["question"], "choices": q["choices"]}
+        # ★ 変更：問題の形（4択/並び替え・画像枚数）は _quiz_question_payload にまとめた
+        #   （正解は revealed のときだけ載る。下の「正解番号は…」のコメントの方針はそのまま）。
+        question_payload = _quiz_question_payload(q, revealed)
+        # ★ 追加：ボーナス問題（正解時の得点2倍）かどうかをクライアントにも知らせる
+        #   （画面に「ボーナス問題！2倍！」等を表示するため。得点計算自体はquiz_answer側）。
+        if room["current_q"] in room.get("bonus_indices", set()):
+            question_payload["is_bonus"] = True
         # ★ 正解番号は、発表(reveal)されるまでは誰にも渡さない（レスポンスを
         #   devtools等で覗かれてカンニングされるのを防ぐ）。ホストも今は
         #   1プレイヤーとして参加するため、ホストだけ特別扱いはしない。
-        if revealed:
-            question_payload["correct_index"] = q["correct_index"]
-        # ★ 追加（2026/08/27）：ホストの詳細設定「ボーナス問題」対象なら、
-        #   得点2倍であることをクライアントにも予告する（画面上のバッジ表示用。
-        #   得点計算そのものは[03_ルーム参加と進行API.md](03_ルーム参加と進行API.md)の
-        #   quiz_answer側）。正解番号と違い、これは出題中から見えても問題ない
-        #   （カンニングにならない）情報なのでrevealed判定を挟まない。
-        if room["current_q"] in room.get("bonus_indices", set()):
-            question_payload["is_bonus"] = True
-        # ★ 追加：途中参加でまだ「見学中」の人は、回答受付数・合計人数のどちらにもカウントしない。
+        # ★ 途中参加でまだ「見学中」（active_from_q未到達）の人は、回答受付数・
+        #   合計人数のどちらにもカウントしない（自分では回答できないため）。
         active_players = [p for p in room["players"].values() if p.get("active_from_q", 0) <= room["current_q"]]
         snap.update({
             "current_q": room["current_q"],
@@ -115,18 +157,24 @@ def _quiz_room_snapshot(room, student_id):
         if revealed:
             snap["first_correct_nickname"] = room.get("first_correct_nickname")
             snap["reveal_started_at"] = room.get("reveal_started_at")
-            snap["reveal_duration_sec"] = QUIZ_REVEAL_DURATION_SEC
+            snap["reveal_duration_sec"] = room.get("reveal_duration_sec", QUIZ_REVEAL_DURATION_SEC)
             # ★ 発表中だけ、押した順（正誤にかかわらず）のミニ順位表に players を上書きする
             snap["players"] = _quiz_room_players_json_press_order(room)
         player = room["players"].get(student_id)
         if player is not None:
             if player.get("active_from_q", 0) > room["current_q"]:
-                # ★ 追加：途中参加で今の問題にはまだ混ざれない「見学中」の状態
+                # ★ 追加：途中参加で今の問題にはまだ混ざれない「見学中」の状態。
+                #   フロントはこれを見て、回答UIの代わりに待機画面を出す。
                 snap["spectating"] = True
             elif player["cur_answer"] is not None:
                 snap["your_answer"] = player["cur_answer"]
                 if revealed:
                     snap["your_correct"] = bool(player["cur_correct"])
+                    # ★ 追加：ボーナス問題（得点2倍）だと固定の「+10点」「+12点」表示が
+                    #   実際の加点と食い違うため、quiz_answer()で確定した実際の加点を
+                    #   そのままフロントに渡す（表示側で倍率を再計算させない）。
+                    if player.get("cur_points"):
+                        snap["your_points"] = player["cur_points"]
     return snap
 ```
 - **これがこの関数で最も重要な安全対策です**：`question_payload`には常に`question`（問題文）と`choices`（選択肢）が含まれますが、`correct_index`（正解の番号）は`revealed`（＝`state == "reveal"`）のときだけ含まれます。もしこのガードが無く、出題中から正解番号がレスポンスに含まれていたら、ブラウザの開発者ツールでネットワーク通信の中身を見るだけで、誰でも正解が分かってしまいます（[00_クイズルームの設計とヘルパー関数.md](00_クイズルームの設計とヘルパー関数.md)の設計方針にあった「正解番号はホストにも発表されるまでは一切渡さない」の実装がここです）。
@@ -135,28 +183,62 @@ def _quiz_room_snapshot(room, student_id):
 - `revealed`のときだけ`_quiz_room_players_json(room, include_correct=True)`で`players`を**上書き**しています。これにより、正解発表の瞬間だけ、他の参加者の正誤（◯×）が一覧に反映されます。
 - `player["cur_answer"]`（**自分自身**の回答）は、`revealed`かどうかに関わらず渡されます。自分が何を選んだかは、他の参加者に隠す必要が無い（自分自身の情報だから）ためです。ただし、自分の回答が「正解だったかどうか」（`your_correct`）は、他の参加者の正誤と同様に`revealed`のときだけ渡されます。
 
-## 3. 見分けにくい誤答の生成：`_pick_distractors`（4953〜4976行）
+## 3. 見分けにくい誤答の生成：`_pick_distractors`（7651〜7704行）
 
 ```python
 def _pick_distractors(correct: str, pool: list, k: int, ranked: bool = False) -> list:
     """
+    正解(correct)に対する誤答をpoolからk個選ぶ。
     ★ 完全ランダムに選ぶと、他のカードの答えと文字数も内容もかけ離れた
       誤答ばかりになりがちで、見た目だけで消去法に正解できてしまっていた。
       正解と文字列として近い（綴り・字面が似ている）ものを優先候補にし、
       その中からランダムに選ぶことで、きちんと覚えていないと迷うような
       4択にする。
+      ★ さらに、綴りの類似度（SequenceMatcher）だけだと「文字数が全然違う
+      せいで一目で誤答と分かる」選択肢が紛れ込みやすかったため、文字数の
+      近さもスコアに加味する。また、候補の絞り込みを従来（上位9件から
+      ランダムに3件）よりタイトにする（上位6件から3件）ことで、
+      「似ているが選ばれなかった」紛らわしい候補が混ざりにくくし、
+      パッと見で消去法が効きにくい4択にする。
     """
+    # ★ 改善（2026/11/14）：採点（類似度の計算）は _distractor_shortlist の1か所にまとめた。
+    #   以前は同じ採点関数がここにも重複して書かれており、CardMakerのキャッシュ生成では
+    #   「即席4択用」と「AIに渡す候補用」で同じ採点を2回やり直していた。
+    #   ranked=True は「pool は既に採点順に並んでいる」という意味（採点を省く）。
+    #   文字種の近さを加味したため、以前（綴り0.7・長さ0.3）とは選ばれ方が変わっている。
+
     scored = pool if ranked else _distractor_shortlist(correct, pool, len(pool))
     pool_size = max(k, min(len(scored), k * 2))
     return random.sample(scored[:pool_size], k)
 
 
 def _distractor_shortlist(correct: str, pool: list, k: int) -> list:
+    """_pick_distractorsと同じ類似度スコアで、上位k件を（ランダム抽選せず）そのまま返す。
+    AIに渡す候補を絞り込むための下ごしらえとして使う（プロンプトを軽くする目的）。"""
+    def _classes(s):
+        # 文字種（漢字／ひらがな／カタカナ／その他）の構成比。漢字だけの語に、ひらがな主体の語が
+        # 並ぶと一目で消去できてしまうため、文字種の近さも加味する。
+        c = {"k": 0, "h": 0, "t": 0, "o": 0}
+        for ch in s:
+            o = ord(ch)
+            if 0x4e00 <= o <= 0x9fff:
+                c["k"] += 1
+            elif 0x3040 <= o <= 0x309f:
+                c["h"] += 1
+            elif 0x30a0 <= o <= 0x30ff:
+                c["t"] += 1
+            else:
+                c["o"] += 1
+        n = max(len(s), 1)
+        return {k: v / n for k, v in c.items()}
+    correct_cls = _classes(correct)
     def _score(a):
         seq_ratio = difflib.SequenceMatcher(None, correct, a).ratio()
         longer = max(len(correct), len(a), 1)
         length_ratio = 1 - abs(len(correct) - len(a)) / longer
-        return seq_ratio * 0.7 + length_ratio * 0.3
+        a_cls = _classes(a)
+        class_ratio = 1 - sum(abs(correct_cls[k] - a_cls[k]) for k in correct_cls) / 2
+        return seq_ratio * 0.5 + length_ratio * 0.25 + class_ratio * 0.25
     return sorted(pool, key=_score, reverse=True)[:k]
 ```
 - **2026/11/14〜：採点（`_score`）は`_distractor_shortlist`の1か所だけにあります。** 以前は全く同じ`_score`が`_pick_distractors`の中にも重複して書かれていました。今の`_pick_distractors`は、`_distractor_shortlist`に「全件を採点順に並べて」と頼み（`k`に`len(pool)`を渡す）、その上位から選ぶだけです。並び順も選ばれ方も以前と同じです。`ranked=True`は「`pool`は既に採点順に並んでいる」という意味で、採点を省きます（CardMakerのキャッシュ生成が使います。[../14_FlaskAPI_CardMaker/04_4択事前生成キャッシュ.md](../14_FlaskAPI_CardMaker/04_4択事前生成キャッシュ.md)参照）。
@@ -167,14 +249,16 @@ def _distractor_shortlist(correct: str, pool: list, k: int) -> list:
 - `pool_size = max(k, min(len(scored), k * 2))`… 上位何件から実際に選ぶかを決めます。`k=3`（3つの誤答が必要）なら、`pool_size`は最大6件です。コメントにある通り、以前は「上位9件からランダムに3件」だったものを「上位6件から3件」とタイトに絞ることで、「似ているが選ばれなかった紛らわしい候補が混ざりにくく」し、消去法が効きにくい4択にする改善が行われています。
 - `random.sample(scored[:pool_size], k)`… 上位の候補群から、最終的にランダムに`k`個を選びます。**完全にスコア順で機械的に選ぶのではなく、上位群からランダムに選ぶ**ことで、同じデッキから何度クイズを作っても、毎回少しずつ違う顔ぶれの誤答になるようにしています。
 
-## 4. デッキからの自動問題生成：`_build_deck_questions`（4979〜5037行）
+## 4. デッキからの自動問題生成：`_build_deck_questions`（8124〜8212行）
 
 ```python
-def _build_deck_questions(deck_filenames, num_questions):
-    """
-    ★ deck_filenames は単一のファイル名（文字列）でも、複数のファイル名の
-      リストでも受け取れる。複数指定した場合は、それぞれのデッキのカードを
-      まとめて1つの問題プールとして扱い、distractorも選んだデッキ全体から選ぶ。
+def _build_deck_questions(guild_id, deck_filenames, num_questions):
+    """単語カードのデッキ（表面=question／裏面=answer）から、答えをシャッフルした
+    4択問題を自動生成する。
+    ★ deck_filenames は単一のファイル名（文字列）でも、複数のファイル名のリストでも
+      受け取れる。複数指定した場合（Web側でフォルダごと選んだ場合を含む）は、
+      それぞれのデッキのカードをまとめて1つの問題プールとして扱い、
+      distractor（不正解の選択肢）も選んだデッキ全体から選ぶ。
     (questions, error_code) を返す（成功時 error_code は None）。"""
     if isinstance(deck_filenames, str):
         deck_filenames = [deck_filenames]
@@ -191,18 +275,41 @@ def _build_deck_questions(deck_filenames, num_questions):
 
 ```python
     cards = []
+    order_questions = []  # ★ 追加：並び替えカードから作った問題（4択の誤答プールとは別に持つ）
     for deck_filename in deck_filenames:
         if not isinstance(deck_filename, str) or "/" in deck_filename or "\\" in deck_filename or ".." in deck_filename:
             return None, "deck_not_found"
-        data, _ = get_card_file(deck_filename)
+        data, _ = get_card_file_for_guild(deck_filename, guild_id)
         if data is None:
             return None, "deck_not_found"
-        cards.extend(
-            c for c in data.get("cards", [])
-            if isinstance(c, dict) and str(c.get("question") or "").strip() and str(c.get("answer") or "").strip()
-        )
+        for c in data.get("cards", []):
+            if not (isinstance(c, dict) and str(c.get("question") or "").strip()):
+                continue
+            if card_type(c) == "order":
+                # ★ 変更：並び替えカードも出題対象にする（kind:"order"の問題になる）。
+                #   ただし4択の誤答プール（cards）には入れない（「a → b → c」は誤答として不自然）。
+                oq = _quiz_order_question_from_card(c, deck_filename)
+                if oq is not None:
+                    order_questions.append(oq)
+                continue
+            if not str(c.get("answer") or "").strip():
+                continue
+            # ★ 追加：どのデッキ・どのカード由来かを覚えておく（クライアントには一切送らない、
+            #   quiz_answer()が不正解時に元デッキへ「わからない」を裏で付けるためだけに使う）。
+            #   idの無い古いカードは対象外にする（CardMaker側のcardKey()のハッシュ
+            #   フォールバックをPython側で厳密に再現するのは割に合わないため）。
+            c = dict(c)
+            c["_src_deck_filename"] = deck_filename
+            c["_src_card_id"] = c.get("id")
+            cards.append(c)
     unique_answers = {c["answer"].strip() for c in cards}
+    # ★ 4択（正解1つ＋不正解3つ）を作るには、答えの異なり（ユニークな値）が
+    #   最低4つ必要。html側の注意書き（「答えの種類が4つ以上あるデッキが必要」）と対応。
+    # ★ 変更：並び替えカードは誤答プールが要らないので、4択が作れないデッキでも
+    #   並び替えカードがあればそれだけで出題する。どちらも無ければ deck_too_small。
     if len(cards) < 4 or len(unique_answers) < 4:
+        cards = []
+    if not cards and not order_questions:
         return None, "deck_too_small"
 ```
 - ここでも[../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md](../12_FlaskAPI_削除依頼システム/00_削除依頼トークンと送信フロー.md)と同じパストラバーサル対策があります。
@@ -210,14 +317,17 @@ def _build_deck_questions(deck_filenames, num_questions):
 - `unique_answers = {c["answer"].strip() for c in cards}`… 集合（set）内包表記で、重複を除いた解答の種類数を数えます。コメントの通り「4択（正解1つ＋不正解3つ）を作るには、答えの異なり（ユニークな値）が最低4つ必要」というルールがここでチェックされます。
 
 ```python
-    n = min(num_questions, len(cards)) if num_questions else len(cards)
-    n = max(1, min(n, QUIZ_MAX_QUESTIONS, len(cards)))
+    n = min(num_questions, len(candidates)) if num_questions else len(candidates)
+    n = max(1, min(n, QUIZ_MAX_QUESTIONS, len(candidates)))
 
-    picked = random.sample(cards, n)
+    picked = random.sample(candidates, n)
     questions = []
-    for card in picked:
+    for kind, card in picked:
+        if kind == "order":
+            questions.append(card)
+            continue
         correct = card["answer"].strip()
-        pool = list(dict.fromkeys(
+        pool = list(dict.fromkeys(  # 同じ答え文言の重複を除去しつつ順序を保つ
             c["answer"].strip() for c in cards if c is not card and c["answer"].strip() != correct
         ))
         if len(pool) < 3:
@@ -225,8 +335,14 @@ def _build_deck_questions(deck_filenames, num_questions):
         choices = _pick_distractors(correct, pool, 3) + [correct]
         random.shuffle(choices)
         questions.append({
-            "question": card["question"].strip(), "choices": choices,
+            "question": card["question"].strip(),
+            "choices": choices,
             "correct_index": choices.index(correct),
+            # ★ 追加：quiz_answer()が不正解時に元デッキへ裏で「わからない」を付けるための
+            #   参照（クライアントには送らない。question_payload等には含めていない）。
+            "source_deck_filename": card.get("_src_deck_filename"),
+            "source_card_id": card.get("_src_card_id"),
+            **_quiz_card_media(card),
         })
     return questions, None
 ```
@@ -243,11 +359,12 @@ def _build_deck_questions(deck_filenames, num_questions):
 - 各カードについて、`pool`（そのカード以外の、正解と異なる解答の集合。`dict.fromkeys(...)`は順序を保ったまま重複除去する、リスト内包の`set`版に近いテクニック）を作り、[3. 見分けにくい誤答の生成：`_pick_distractors`（4953〜4976行）](#3-見分けにくい誤答の生成pick_distractors49534976行)の`_pick_distractors`で3つの誤答を選びます。
 - `choices = _pick_distractors(...) + [correct]`で4つの選択肢を作り、`random.shuffle(choices)`でシャッフルしてから、`correct_index`（正解が何番目に来たか）を記録します。この時点ではまだ、誰が見ても正解が分からないよう、正解の位置自体もランダムです。
 
-## 5. 手入力問題の検証：`_validate_manual_questions`（5039〜5063行）
+## 5. 手入力問題の検証：`_validate_manual_questions`（8214〜8238行）
 
 ```python
 def _validate_manual_questions(raw_questions):
-    """成功時: ((questions, check_fields), None) / 失敗時: (None, error_code)"""
+    """ホストが手入力した問題データを検証する。
+    成功時: ((questions, check_fields), None) / 失敗時: (None, error_code)"""
     if not isinstance(raw_questions, list) or not raw_questions:
         return None, "invalid_questions"
     questions = []
@@ -276,10 +393,10 @@ def _validate_manual_questions(raw_questions):
 - `if not isinstance(correct_index, int) or isinstance(correct_index, bool) or not (0 <= correct_index < 4):`… [../09_FlaskAPI_予定管理/01_学習ログ記録APIのなりすまし対策と連打対策.md](../09_FlaskAPI_予定管理/01_学習ログ記録APIのなりすまし対策と連打対策.md)の`add_study_log`で見たのと同じ、`bool`が`int`のサブクラスであることへの対策が、ここにも登場しています。加えて、正解番号が0〜3の範囲に収まっているかも確認します。
 - `check_fields`… 検証したテキストを、後で呼び出し元が[../02_データ保存基盤/02_設定ファイルと不正文字チェック.md](../02_データ保存基盤/02_設定ファイルと不正文字チェック.md)の`reject_if_bug_chars`にまとめて渡すための辞書です。この関数自身は不正文字チェックまでは行わず、その責務は呼び出し元に委ねられています。
 
-## 6. クイズ結果のCardMakerアーカイブ（5065〜5128行）
+## 6. クイズ結果のCardMakerアーカイブ（8240〜8329行）
 
 ```python
-def _archive_manual_quiz(title, questions, student_id, nickname):
+def _archive_manual_quiz(guild_id, title, questions, student_id, nickname, players=None):
     """
     ★ ホストが「自分で問題を作る」（オリジナル4択）で作成したクイズを、
       CardMakerの「クイズ過去問」フォルダにデッキとして自動保存する。
@@ -295,9 +412,14 @@ def _archive_manual_quiz(title, questions, student_id, nickname):
       作成済みリストなど、「answerは文字列である」という前提の既存コードを
       一切変更せずに動かせる（choices/correct_indices は選択式UIだけが見る）。
     ・アーカイブに失敗しても、クイズ自体の進行は失敗させない（ベストエフォート）。
+    ・players（room["players"]、任意）を渡すと、各プレイヤーがゲーム中に
+      不正解だった問題（player["wrong_indices"]、quiz_answer参照）を、
+      今まさに作成したこの過去問デッキへ裏で「わからない」として記録する。
+      「デッキから自動作成」と違い元デッキが存在しないため、ゲーム終了で
+      この過去問デッキ自体が生まれた今がその唯一の機会になる。
     """
     try:
-        _ensure_quiz_archive_folder()
+        _ensure_quiz_archive_folder(guild_id)
         cards = [{
             "id": secrets.token_hex(6),
             "question": q["question"],
@@ -306,8 +428,13 @@ def _archive_manual_quiz(title, questions, student_id, nickname):
             "correct_indices": [q["correct_index"]],
             "explanation": "",
             "imgs_q": [], "imgs_a": [], "imgs_e": [],
+            "type": "choice",  # ★ 追加：カード種別を明示（並び替えカード対応で導入したtype）
+            # ★ 追加：カード単位の作成者記録（ホストが全問を作ったのでホスト本人）。「作成した
+            #   問題数が多い人」を基準にする各種機能（CSVダウンロード・削除依頼の通知先等）で使う。
+            "created_by_id": student_id,
+            "created_by_nickname": nickname,
         } for q in questions]
-        filename = generate_card_filename()
+        filename = generate_card_filename(guild_id)
         card_payload = {
             "name": title,
             "cards": cards,
@@ -317,20 +444,29 @@ def _archive_manual_quiz(title, questions, student_id, nickname):
             "incomplete": False,
             "choice_mode": True,  # ★ 選択式デッキであることのマーカー（単一/複数は問題ごとにcorrect_indicesの個数で決まる）
             "quiz_archive": True,  # ★ 追加（2026/08/21）：クイズ過去問デッキであることのマーカー。
-            # フォルダ位置に依存させると、フォルダの外へ移動できるようにした際に
-            # 判定できなくなる（save_cardsが問題編集を禁止する対象の特定にも使う）ため、
-            # デッキ自身に持たせる。
+            # フォルダ位置に依存させると、フォルダの外へ移動できるようにした際に判定できなくなる
+            # （save_cardsが問題編集を禁止する対象の特定にも使う）ため、デッキ自身に持たせる。
+            "guild_id": guild_id,  # ★ 複数サーバー対応：このデッキがどのサーバー向けかを記録する
         }
         put_card_file(filename, card_payload)
-        index_change = upsert_cards_index_entry(filename, card_payload)
-        change = deck_file_diff(f"{CARDS_DIR}/{filename}", None, card_payload)
+        index_change = upsert_cards_index_entry(guild_id, filename, card_payload)
+        change = deck_file_diff(guild_id, f"{CARDS_DIR}/{filename}", None, card_payload)
         detail = [c for c in (change, index_change) if c]
         log_event(
+            guild_id,
             "card",
             f"みんなでクイズの結果を「{title}」として「クイズ過去問」に保存しました（{len(cards)}問）。",
             actor=nickname,
             detail=detail if detail else None,
         )
+        # ★ 各プレイヤーが不正解だった問題を、今作った過去問デッキへ裏で「わからない」として記録する
+        #   （プレイヤーごとに1回の保存にまとめる）。デッキ作成が失敗した場合はここへ来ないので正しい。
+        for pid, p in (players or {}).items():
+            if _is_guest_id(pid):
+                continue  # ★ ゲストには学習データが無い（study_data_*を作らない）
+            ids = [cards[i]["id"] for i in p.get("wrong_indices") or [] if 0 <= i < len(cards)]
+            if ids:
+                _silently_mark_unsure(guild_id, pid, filename, ids)
     except Exception as e:
         print(f"[WARN] クイズ過去問の保存に失敗しました（クイズの進行自体は続行）: {e}")
 ```
@@ -341,11 +477,9 @@ def _archive_manual_quiz(title, questions, student_id, nickname):
 ```python
 def _archive_room_if_needed(room):
     """
-    ★ QUIZ_ROOMS_LOCK を保持している状態で呼び出すこと。
-      ルームが終了(state=="ended")した瞬間に1回だけ呼ばれ、オリジナル4択
-      （source=="manual"）だったクイズをCardMakerへアーカイブする。
-      room["archived"] で二重登録を防ぐ（自然終了とホストの手動終了の
-      両方から呼ばれ得るため）。
+    ★ QUIZ_ROOMS_LOCK を保持している状態で呼び出すこと。オリジナル4択（source=="manual"）の
+      クイズが終了した瞬間に1回だけCardMakerへ保存する（room["archived"] で二重登録を防ぐ）。
+      ファイル書き込みは別スレッドで行い、全ルーム共通のこのロックを握ったままにしない。
     """
     if room.get("source") != "manual" or room.get("archived"):
         return
@@ -383,8 +517,8 @@ def _archive_room_if_needed(room):
 ```python
 OLLAMA_HOST = (os.environ.get("OLLAMA_HOST") or "").strip().rstrip("/")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL") or "qwen2.5-coder:7b"
-QUIZ_AI_TIMEOUT_SEC = 45
-QUIZ_AI_SHORTLIST_SIZE = 12
+QUIZ_AI_TIMEOUT_SEC = 45        # Ollamaへの問い合わせ1回あたりのタイムアウト（バックグラウンド実行なので余裕を持たせる）
+QUIZ_AI_SHORTLIST_SIZE = 12    # AIに渡す誤答候補の数（プロンプトを軽くするため、類似度上位のみに絞る）
 ```
 - `OLLAMA_HOST`が未設定（開発機など）なら、この機能は**一切動かず**、従来通り`_pick_distractors`だけで誤答が決まります。本番サーバーでは`.env`に`OLLAMA_HOST=http://ollama:11434`を設定し、あらかじめ`docker network connect pythonbot1istudy_default ollama`でBotコンテナ（ネットワーク`pythonbot1istudy_default`）とOllamaコンテナ（元々は`bridge`ネットワークのみ、ホストの`127.0.0.1:11434`にしか公開していない）を同じDockerネットワークに繋いでおく必要があります（ホスト側のポート公開範囲は変更していないので、外部への公開状況は変わりません）。
 
@@ -394,6 +528,8 @@ Web側の`quiz_create`はクライアントで12秒のタイムアウトが設�
 
 ```python
 if source == "deck" and OLLAMA_HOST:
+    # ★ ローカルAIによる誤答強化はロビー中に裏で行う（quiz_create自体はブロックしない）。
+    #   OLLAMA_HOST未設定（開発機など）なら従来通りスレッドすら起動しない。
     Thread(target=_ai_enhance_quiz_room_choices, args=(code, guild_id, deck_filenames), daemon=True).start()
 ```
 - `source == "deck"`のときだけ（ホストが手入力した`manual`クイズは対象外＝人が作った問題にAIが手を入れる必要は無い）。
@@ -402,6 +538,18 @@ if source == "deck" and OLLAMA_HOST:
 
 ```python
 def _ai_enhance_quiz_room_choices(code, guild_id, deck_filenames):
+    """
+    ★ 「デッキから自動作成」のクイズについて、ロビー中（ホストが「開始」する前）に
+      バックグラウンドでローカルAI（Ollama）に問い合わせ、誤答（不正解の選択肢）を
+      文字列の綴りだけでなく意味的にも紛らわしいものへ差し替える。
+      quiz_create自体はこの処理を待たずに即座に応答を返す（Web側のタイムアウトは
+      12秒に対し、CPU動作のローカルAIは数秒〜数十秒かかることがあるため、
+      作成リクエストの応答をブロックしない設計にしてある）。
+      ホストが開始してしまった後（room["state"] != "lobby"）は差し替えを行わない
+      （出題中・発表中のデータを書き換えると、既に配信済みの選択肢と食い違う
+      不整合が起きるため）。呼び出しはこの関数専用のバックグラウンドスレッドから行い、
+      失敗・タイムアウト時は何もしない（既存の類似度ベースの誤答のまま進行する）。
+    """
     with QUIZ_ROOMS_LOCK:
         room = QUIZ_ROOMS.get(code)
         if room is None or room["state"] != "lobby":
@@ -417,7 +565,7 @@ def _ai_enhance_quiz_room_choices(code, guild_id, deck_filenames):
     with QUIZ_ROOMS_LOCK:
         room = QUIZ_ROOMS.get(code)
         if room is None or room["state"] != "lobby":
-            return
+            return  # 差し替え中にホストが開始してしまった場合は捨てる（進行中データとの不整合防止）
         room["questions"] = improved
 ```
 - AIへの問い合わせの**前後2回**、`room["state"] == "lobby"`であることを確認しています。もしホストがAIの応答を待たずに「開始」してしまい、出題（`question`）や発表（`reveal`）が始まっていたら、`questions`を書き換えるのを中断します。出題中に選択肢の中身が裏で変わってしまうと、既にクライアントへ配信済みの選択肢・正解番号と食い違う不整合が起きるためです。
@@ -427,17 +575,32 @@ def _ai_enhance_quiz_room_choices(code, guild_id, deck_filenames):
 
 ```python
 def _ai_pick_quiz_distractors(questions, guild_id, deck_filenames):
+    """questions（_build_deck_questionsの出力）を受け取り、各問題の誤答3つを
+    ローカルAIでより紛らわしいものに差し替えた新しいリストを返す。
+    1問ごとに差し替えの成否を判定し、失敗した問題だけ元のままにする。
+    AIへの問い合わせ自体が失敗・応答不正だった場合はNoneを返す
+    （呼び出し元は既存の選択肢をそのまま使うこと）。"""
     answer_pool = _collect_deck_unique_answers(guild_id, deck_filenames)
     if len(answer_pool) < 2:
         return None
+
     items = []
     for i, q in enumerate(questions):
+        if (q.get("kind") or "choice") == "order":
+            continue  # ★ 並び替え問題には誤答が無いのでAI強化の対象外（元のまま残す）
         correct = q["choices"][q["correct_index"]]
         candidates = _distractor_shortlist(
             correct, [a for a in answer_pool if a != correct], QUIZ_AI_SHORTLIST_SIZE
         )
         items.append({"i": i, "question": q["question"], "correct": correct, "candidates": candidates})
-    result = _ollama_generate_json(_build_quiz_distractor_prompt(items))
+
+    if not items:
+        return None  # ★ 4択の問題が1問も無い（並び替え問題だけ）ならAIに問い合わせない
+    # ★ 実測（qwen2.5-coder:7b・CPU動作）で3問あたり約35秒かかったため、問題数に応じて
+    #   タイムアウトを伸ばす（固定45秒だと出題数が多いクイズで確実に間に合わない）。
+    #   バックグラウンドスレッドでの実行なのでWeb側の応答をブロックする心配は無い。
+    timeout = max(QUIZ_AI_TIMEOUT_SEC, 20 * len(items))
+    result = _ollama_generate_json(_build_quiz_distractor_prompt(items), timeout=timeout)
     ...
 ```
 - `_collect_deck_unique_answers`… `_build_deck_questions`と同じデッキ群から、もう一度「解答（answer）の重複無し一覧」を集め直します（クイズ作成時に選ばれた問題だけでなく、デッキ全体の解答を候補プールにするため）。
@@ -452,15 +615,22 @@ AIには「まずcandidates（綴りが似ている実在の解答）の中か�
 ### 7-6. `_sanitize_ai_distractors`：AI応答の検証
 
 ```python
-def _sanitize_ai_distractors(distractors, correct: str):
+def _sanitize_ai_distractors(distractors, correct: str, question: str = ""):
+    """AIが返した誤答候補を検証する。重複なく・correctと異なり・禁止文字を含まない
+    文字列がちょうど3件そろえばそのリストを、そろわなければNoneを返す
+    （None＝この問題は差し替えず、既存の選択肢のまま使う）。"""
     if not isinstance(distractors, list):
         return None
     max_len = max(60, len(correct) * 3)
+    kanji = _is_kanji_writing(question, correct)
     cleaned = []
     seen = {correct.strip()}
     for d in distractors:
         text = str(d or "").strip()
         if not text or len(text) > max_len or text in seen or find_bug_chars(text):
+            continue
+        # 漢字の書き取りは、correctと同じ字数の漢字だけの語に限る（かな書きや別形式は不採用）
+        if kanji and (len(text) != len(correct.strip()) or not all(0x4e00 <= ord(ch) <= 0x9fff or ord(ch) == 0x3005 for ch in text)):
             continue
         seen.add(text)
         cleaned.append(text)

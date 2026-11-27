@@ -4,7 +4,7 @@
 
 ---
 
-## 1. ポーリングとSSE（577〜622行）
+## 1. ポーリングとSSE（771〜815行）
 
 ```js
 function startPolling() {
@@ -23,8 +23,9 @@ function startQuizRealtime() {
   try {
     sseHandle = new EventSource(`${API_BASE}events?guild_id=${GUILD_ID}`);
     sseHandle.onmessage = () => { pollOnce(); };
-  } catch (e) {}
-}
+  } catch (e) {
+    // EventSource非対応環境などでも、定期ポーリングだけで動作を継続できる
+  }
 ```
 - SSE通知が届くたびに、次の400msポーリングを待たずすぐさま`pollOnce()`を呼びます。
 
@@ -37,6 +38,12 @@ async function pollOnce() {
       stopPolling();
       await showConfirm({ title: 'このクイズは終了しました', desc: 'ホストが退出したか、時間が経ちすぎたため終了しました。', okLabel: 'ホームに戻る', cancelLabel: '閉じる' });
       backToHomeFromResult();
+    } else if (isGuest && (data.error === 'not_logged_in' || data.error === 'guild_membership_required')) {
+      // ゲストトークンの有効期限切れ（ルームとは別）
+      stopPolling();
+      roomCode = null;
+      document.getElementById('ge-msg').textContent = '参加の有効期限が切れました。もう一度参加URLを開いてください';
+      showScreenQ('guest-end');
     }
     return;
   }
@@ -49,39 +56,51 @@ async function pollOnce() {
 
 ---
 
-## 2. 状態に応じた画面の出し分け：`renderRoom(room)`（627〜641行）
+## 2. 状態に応じた画面の出し分け：`renderRoom(room)`（820〜836行）
 
 ```js
 function renderRoom(room) {
   lastRoomSnapshot = room;
-  if (room.state === 'lobby') { renderLobby(room); }
-  else if (room.state === 'countdown') { renderCountdown(room); }
-  else if (room.state === 'intro') { renderIntro(room); }
-  else if (room.state === 'question' || room.state === 'reveal') {
+
+  if (room.state === 'lobby') {
+    renderLobby(room);
+  } else if (room.state === 'countdown') {
+    renderCountdown(room);
+  } else if (room.state === 'intro') {
+    renderIntro(room);
+  } else if (room.state === 'question' || room.state === 'reveal') {
     if (isHost) renderHostPlay(room); else renderPlayerPlay(room);
-  } else if (room.state === 'ranking') { renderRanking(room); }
-  else if (room.state === 'ended') { renderResult(room); }
+  } else if (room.state === 'ranking') {
+    renderRanking(room);
+  } else if (room.state === 'ended') {
+    renderResult(room);
+  }
 }
 ```
 - サーバーが管理する`room.state`（このルームが今どの段階にあるか）を見て、対応する描画関数に振り分けるだけの、シンプルな「状態遷移に応じた描画」です。**進行のロジック自体（いつ次の状態に移るか）はすべてサーバー側が担当**しており、クライアント側は「今の状態をそのまま描画する」ことに徹しています。これは、[../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md](../02_Cardmaker/09_Cardmaker.js_その9_数式入力とリアルタイム更新.md)などで見た「サーバーを正とする」設計方針を、ゲーム進行という文脈でも一貫して適用したものです。★ 追加：`"ranking"`（正解発表と次の問題の間に挟む、スコア順の途中経過）の分岐が増えました。詳しくは8節で解説します。
 
-### 2.1 カウントダウン画面（643〜661行）
+### 2.1 カウントダウン画面（841〜856行）
 ```js
-let lastCountdownStartedAt = null;
+let lastCountdownStartedAt = null; // ★ 直前に描画したカウントダウンの開始時刻（重複ポップ防止用）
 function renderCountdown(room) {
   showScreenQ('countdown');
   const el = document.getElementById('cd-num');
   el.dataset.startedAt = room.countdown_started_at || '';
   el.dataset.limit = room.countdown_duration_sec || '';
+  // ★ 修正：以前はここで毎回 lastCountdownShown をリセットしていたため、
+  //   ポーリング（1秒間隔）のたびに「同じ数字」へポップ演出をやり直してしまい、
+  //   「5,5,4,4,3,3…」のように各数字が2回ずつ表示されて見えるバグがあった。
+  //   本当に新しいカウントダウンが始まった時（countdown_started_atが変わった時）
+  //   だけリセットする。
   if (room.countdown_started_at !== lastCountdownStartedAt) {
     lastCountdownStartedAt = room.countdown_started_at;
-    lastCountdownShown = null;
+    lastCountdownShown = null; // 新しいカウントダウンのときだけ「5」からポップ演出させる
   }
 }
 ```
 - コメントに過去のバグ修正が記録されています：「以前はここで毎回`lastCountdownShown`をリセットしていたため、ポーリング（1秒間隔）のたびに『同じ数字』へポップ演出をやり直してしまい、『5,5,4,4,3,3…』のように各数字が2回ずつ表示されて見えるバグがあった。本当に新しいカウントダウンが始まった時（`countdown_started_at`が変わった時）だけリセットする」。ポーリングの頻度と、実際に表示すべき数字が変わる頻度がズレていることで起きた表示バグを、「開始時刻が変わったときだけ」という条件に直すことで解決しています。
 
-### 2.2 ロビー画面（670〜693行）
+### 2.2 ロビー画面（867〜882行）
 ```js
 function renderLobby(room) {
   const screenId = isHost ? 'host-lobby' : 'player-lobby';
@@ -90,22 +109,14 @@ function renderLobby(room) {
   titleEl.textContent = room.title;
 
   if (isHost) {
+    document.getElementById('hl-url').textContent = joinUrlFor(roomCode);
     document.getElementById('hl-count').textContent = `参加者 ${room.players.length}人`;
     document.getElementById('hl-players').innerHTML = playerChipsHtml(room.players);
-    document.getElementById('hl-start-btn').disabled = room.players.length === 0;
+    { const sb = document.getElementById('hl-start-btn'); if (sb.dataset.busy !== '1') sb.disabled = room.players.length === 0; }
   } else {
     document.getElementById('pl-status').textContent = `${room.host_nickname} さんが開始するのを待っています…（参加者 ${room.players.length}人）`;
     document.getElementById('pl-players').innerHTML = playerChipsHtml(room.players);
   }
-}
-
-function playerChipsHtml(players) {
-  if (!players.length) return `<p style="color:var(--text-dim);font-size:13px;">まだ誰も参加していません</p>`;
-  return players.map(p => `
-    <div class="qz-player-chip">
-      <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
-      ${escapeHtml(p.nickname)}
-    </div>`).join('');
 }
 ```
 - ホストと参加者で表示先の画面ID自体を切り替えつつ、参加者が0人ならホストの「クイズを始める」ボタンを押せなくします。
@@ -116,7 +127,7 @@ function playerChipsHtml(players) {
 
 コメントに設計意図が説明されています：「ホストも1人の参加者として一緒に回答する。出題画面はホスト用／プレイヤー用でほぼ同じ処理になるため、共通ロジックをここにまとめる」。`opts`引数として、ホスト画面用・参加者画面用それぞれの要素IDのセットを渡すことで、**1つの関数でどちらの画面も描画できる**ようにしています（`renderHostPlay`/`renderPlayerPlay`、5節）。
 
-### 3.1 問題が変わったかどうかの検知（704〜707行）
+### 3.1 問題が変わったかどうかの検知（931〜934行）
 ```js
 const qChanged = room.current_q !== renderedQIndex;
 const stateChanged = room.state !== renderedState;
@@ -125,15 +136,21 @@ renderedQIndex = room.current_q; renderedState = room.state;
 ```
 - `renderedQIndex`/`renderedState`（グローバル変数）に「直近に描画した問題番号・状態」を覚えておき、今回のデータと比較します。問題番号が変わっていれば、`hasAnsweredThisQ`（この問題に回答済みか）フラグをリセットします。
 
-### 3.2 選択肢ボタンの再構築（719〜724行）
+### 3.2 選択肢ボタンの再構築（973〜986行）
 ```js
 const choicesEl = document.getElementById(choicesId);
-if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dataset.built) !== room.current_q) {
-  choicesEl.innerHTML = room.question.choices.map((c, i) => `
-    <button class="qz-choice-btn ${CHOICE_CLASSES[i]}" data-idx="${i}">${escapeHtml(c)}</button>`).join('');
-  choicesEl.dataset.built = room.current_q;
-  // ★ 押した瞬間(pointerdown)に反応させる。作り直されない親要素でイベントを受ける（委譲）
-  if (!choicesEl.dataset.bound) { /* pointerdown と click の両方で submitAnswer(idx, ..., Date.now() + quizClockOffsetMs) を呼ぶ */ }
+// ★ 追加：並び替え問題（kind:"order"）は4択の選択肢欄を使わず、専用の解答欄（orderEl）を出す。
+//   選択肢欄は空にして隠す（委譲ハンドラ・下の forEach は子要素が無いので何もしない）。
+const isOrder = room.question.kind === 'order';
+if (qImagesEl) renderQuizImages(qImagesEl, room.current_q, 'q', room.question.img_counts?.q || 0);
+if (isOrder) {
+  choicesEl.style.display = 'none';
+  if (choicesEl.childElementCount) choicesEl.replaceChildren();
+  choicesEl.dataset.built = '';
+  if (orderEl) { orderEl.style.display = ''; renderOrderUI(room, orderEl, { choicesId, waitingNoteId }); }
+} else {
+  choicesEl.style.display = '';
+  if (orderEl && orderEl.style.display !== 'none') { orderEl.style.display = 'none'; orderEl.replaceChildren(); orderEl.dataset.sig = ''; }
 }
 ```
 - 選択肢ボタン自体は、**問題が変わったとき（または初回）だけ**作り直します。`choicesEl.dataset.built`に「今表示している選択肢がどの問題番号のものか」を記録しておき、それと今回のデータの`current_q`が一致していれば、ボタンの再構築自体をスキップします。400msごとの高頻度なポーリングのたびに、変わっていない部分までDOMを作り直すのは無駄なので、必要なとき（問題が切り替わったとき）だけに絞る最適化です。
@@ -142,8 +159,17 @@ if (qChanged || stateChanged || !choicesEl.dataset.built || Number(choicesEl.dat
 ```js
 const choiceSpacerEl = choicesEl.previousElementSibling;
 if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
-  choiceSpacerEl.classList.toggle('qz-choices-bottom', !revealed);
-}
+  if (qChanged) {
+    // ★ 追加：「問題開始時はボタンのスワイプ（スライド）なくていい」との指摘で、
+    //   新しい問題に切り替わった瞬間だけはアニメーション無しで即座に下寄せの
+    //   位置にする（スライドさせるのは、同じ問題のまま正解発表が起きる時だけ）。
+    choiceSpacerEl.style.transition = 'none';
+    choiceSpacerEl.classList.add('qz-choices-bottom');
+    void choiceSpacerEl.offsetHeight; // 強制リフローでtransition:noneを確定させてから元に戻す
+    choiceSpacerEl.style.transition = '';
+  } else {
+    choiceSpacerEl.classList.toggle('qz-choices-bottom', !revealed);
+  }
 ```
 ```css
 .qz-choice-spacer{ flex-grow:0; transition:flex-grow .35s ease; }
@@ -158,7 +184,7 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
 - 出題画面の`.qz-body`の下側パディングに`env(safe-area-inset-bottom, 0px)`を追加（`calc(1.25rem + env(safe-area-inset-bottom, 0px))`）。選択肢を下寄せするようになったことで、ホームインジケーター等のセーフエリアに選択肢が近づきすぎる端末があったための対応。
 - 正解発表（`revealed`）になったらこのクラスを外し、今まで通りの配置に戻す（「結果発表はいまのまま」という要望通り、見た目を変えないため）。
 
-### 3.3 選択肢の見た目の更新（726〜743行）
+### 3.3 選択肢の見た目の更新（1027〜1044行）
 ```js
 [...choicesEl.children].forEach((btn, i) => {
   const picked = yourAnswer === i;
@@ -167,10 +193,14 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
   if (revealed) {
     const isCorrect = i === room.question.correct_index;
     btn.classList.toggle('qz-correct-flash', isCorrect);
+    // ★ 自分が選んだ選択肢が不正解だった場合は、赤く光らせて
+    //   「これがあなたの選んだ（間違っていた）答え」だとひと目で分かるようにする。
     btn.classList.toggle('qz-wrong-flash', picked && !isCorrect);
     btn.classList.toggle('qz-dim', !isCorrect && !picked);
   } else {
     btn.classList.remove('qz-correct-flash', 'qz-wrong-flash');
+    // ★ 回答直後（発表前）も、選んでいない残りの選択肢を薄くして、
+    //   「自分が押したのはこれ」を最後まではっきり見せ続ける。
     btn.classList.toggle('qz-dim', answered && !picked);
   }
 });
@@ -178,7 +208,7 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
 - 選択肢ボタン自体（3.2節）とは別に、**見た目のクラス（色や薄さ）だけはポーリングのたびに毎回更新**しています。これにより、正解発表（`revealed`）になった瞬間に、正解の選択肢が光り、自分が選んだ間違った選択肢が赤く光る、という演出がスムーズに反映されます。
 - コメントに「回答直後（発表前）も、選んでいない残りの選択肢を薄くして、『自分が押したのはこれ』を最後まではっきり見せ続ける」とあります。
 
-### 3.4 正解・不正解のフィードバック（745〜769行）
+### 3.4 正解・不正解のフィードバック（1046〜1076行）
 ```js
   const feedbackEl = document.getElementById(feedbackId);
   const waitingNote = document.getElementById(waitingNoteId);
@@ -187,7 +217,12 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
     if (room.your_correct) {
       const bonus = room.first_correct_nickname === STUDENT.nickname;
       feedbackEl.className = 'qz-answer-feedback ok';
-      const pointsText = room.your_points != null ? room.your_points : (bonus ? 12 : 10);
+      // ★ 修正：以前は「+10点」「+12点」を固定文言で表示していたため、ホストの
+      //   詳細設定「ボーナス問題」（得点2倍）が効いた問題では、実際の加点
+      //   （20点・24点）と表示が食い違っていた（「ちゃんと2倍になってるんだけど、
+      //   表示が+12になってしまっている」との指摘）。サーバー側が実際に加点した
+      //   点数（room.your_points）をそのまま表示する。
+      const pointsText = room.your_points != null ? room.your_points : (bonus ? 12 : 10); // 念のためのフォールバック
       feedbackEl.innerHTML = bonus ? (Icons.html('celebrate', {size:15}) + ` 正解！一番乗りボーナスで +${pointsText}点！`) : (Icons.html('checkCircle', {size:15}) + ` 正解！ +${pointsText}点`);
     } else {
       feedbackEl.className = 'qz-answer-feedback ng';
@@ -210,12 +245,13 @@ if (choiceSpacerEl && choiceSpacerEl.classList.contains('qz-choice-spacer')) {
 - 「正解した（かつ一番乗りだった）」「正解した（一番乗りではない）」「不正解」「時間切れで未回答」「回答済みで発表待ち」「未回答」という、いくつものパターンを網羅的に出し分けています。正解の基本点は10点、一番乗りボーナスは+2点（合計12点）と、HTMLのヒーロー文言（`正解10点、一番早く正解すると+2点`）と一致する数値がここに実装されています。
 - ★ 修正（2026/08/27）：`pointsText`は元々`bonus ? 12 : 10`という固定値だったが、ホストの詳細設定「ボーナス問題」（得点2倍、[00_クイズルームの設計とヘルパー関数.md](../../1I勉強会bot解説/15_FlaskAPI_クイズ/00_クイズルームの設計とヘルパー関数.md)参照）が効いた問題では実際の加点（20点・24点）と表示が食い違ってしまっていた（「ちゃんと2倍になってるんだけど、表示が+12になってしまっている」との報告）。サーバー側が計算した実際の加点（`room.your_points`、`quiz_answer`の`player["cur_points"]`をそのまま返したもの）を使うようにし、`your_points`が来ていない場合（後方互換・念のため）だけ従来通りの固定値にフォールバックする。
 
-### 3.5 正解発表パネル（774〜785行）
+### 3.5 正解発表パネル（1078〜1116行）
 ```js
   // ★ 修正：以前はホスト画面（hp-reveal）だけに「一番早く正解した人」と
   //   ミニ順位表を表示していた。参加者にはホストと同じ情報を見せていなかった
   //   ため、ホスト・参加者共通のこの関数から両方の画面を描画するようにする。
   const revealPanel = document.getElementById(revealPanelId);
+  if (revealExtraEl) renderRevealExtra(revealExtraEl, room);
   if (room.state === 'reveal') {
     revealPanel.style.display = '';
     document.getElementById(firstBadgeId).innerHTML = room.first_correct_nickname
@@ -243,7 +279,7 @@ function miniLeaderboardHtml(players) {
       <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
       <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
       ${quizMarkHtml(p)}
-      <span class="qz-lb-score">${p.score}点</span>
+      <span class="qz-lb-score">${p.score}${escapeHtml(p.score_unit || '点')}</span>
     </div>`).join('');
 }
 
@@ -260,7 +296,7 @@ function quizMarkHtml(p) {
 
 ---
 
-## 4. タイマーバーとカウントダウンの滑らかな更新（830〜881行）
+## 4. タイマーバーとカウントダウンの滑らかな更新（1223〜1270行）
 
 ```js
 function updateTimerBarFor(room, elId) {
@@ -278,6 +314,10 @@ function updateTimerBarFor(room, elId) {
 
 ```js
 function tickQuizClocks() {
+  // ★ 修正：Date.now()をそのまま使うと端末の時計のズレがそのまま
+  //   タイマーバー／カウントダウンのズレになる（ホストと参加者で進み方が
+  //   食い違って見える原因だった）。quizClockOffsetMsで補正した
+  //   「サーバー時計での現在時刻」を使って計算する。
   const serverNow = Date.now() + quizClockOffsetMs;
   ['hp-timerbar', 'pp-timerbar'].forEach(id => {
     const el = document.getElementById(id);
@@ -316,10 +356,9 @@ function tickCountdownNum(serverNow) {
 
 ---
 
-## 5. 回答の送信とホスト操作（883〜937行）
+## 5. 回答の送信とホスト操作（1272〜1294行）
 
 ```js
-// ★ 変更：押した瞬間の時刻(pressedAtMs)と問題番号(q_index)も送り、通信失敗時だけ最大3回再送する
 async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId = 'pp-waiting-note', pressedAtMs = Date.now() + quizClockOffsetMs) {
   if (hasAnsweredThisQ) return;
   hasAnsweredThisQ = true;
@@ -332,8 +371,15 @@ async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId
   });
   const waitingNote = document.getElementById(waitingNoteId);
   if (waitingNote) waitingNote.style.display = '';
-  // （実装では network エラーの間だけ最大3回再送。送れなければ hasAnsweredThisQ=false に戻して押し直せるようにする）
-  await apiPost('quiz_answer', withAuth({ code: roomCode, choice_index: choiceIndex, pressed_at_ms: pressedAtMs, q_index: renderedQIndex }));
+  // ★ 押された瞬間の時刻（サーバー時計換算のms）も送る。通信が遅れても回答時間が不利にならない。
+  const sentQ = renderedQIndex;
+  const res = await postQuizAnswer({ choice_index: choiceIndex }, pressedAtMs, sentQ);
+  if (renderedQIndex === sentQ && (!res || (!res.ok && res.error === 'network'))) {
+    // 送れなかった：押し直せるように戻す
+    hasAnsweredThisQ = false;
+    [...choicesEl.children].forEach(btn => { btn.disabled = false; btn.classList.remove('qz-picked', 'qz-dim'); });
+    if (waitingNote) waitingNote.style.display = 'none';
+  }
   pollOnce();
 }
 ```
@@ -342,11 +388,12 @@ async function submitAnswer(choiceIndex, choicesId = 'pp-choices', waitingNoteId
 ```js
 async function hostStart() {
   const btn = document.getElementById('hl-start-btn');
-  btn.disabled = true;
+  setBtnBusy(btn, true, '開始中…');
   const data = await apiPost('quiz_start', withAuth({ code: roomCode }));
-  if (!data.ok) { btn.disabled = false; showAppAlert({ title: 'エラー', desc: quizErrorText(data.error) }); return; }
+  if (!data.ok) { setBtnBusy(btn, false); showAppAlert({ title: 'エラー', desc: quizErrorText(data.error) }); return; }
   applyServerNow(data);
   renderRoom(data.room);
+  setBtnBusy(btn, false);
 }
 async function confirmQuitHost() {
   if (quitting) return;
@@ -382,38 +429,47 @@ async function confirmQuitPlayer() {
 
 ---
 
-## 6. 結果発表：`renderResult(room)`（942〜965行）
+## 6. 結果発表：`renderResult(room)`（1612〜1646行）
 
 ```js
-// ★ 修正（2026/08/27）：room.playersはサーバー側で既にスコア降順（同点は
-//   回答時間合計が短い方が上）に並べ済みなので、ここで再ソートしない。
+// ★ 修正：room.players はサーバー側で既にスコア降順（同点は回答時間合計が
+//   短い方が上）に並べ済みなので、ここで再ソートしない（以前はスコアだけで
+//   再ソートしていたため、サーバー側のタイブレークが反映されず崩れていた）。
 const sorted = room.players;
 const podiumOrder = [sorted[1], sorted[0], sorted[2]]; // 2位・1位・3位の順で表示（真ん中が1位）
-// ★ 修正（2026/08/27）：金・銀・銅が同じ形のアイコンを色だけ変えて表示していたため
-//   「全部1位に見える」という指摘があった。線画から塗りつぶしに変え、色もはっきり離した。
-const medalMap = [
-  `<svg width="18" height="18" viewBox="0 0 24 24" fill="#94a3b8" stroke="#fff" stroke-width="1.3" ...>...</svg>`, // 銀（明度を落とした濃いグレー）
-  `<svg width="18" height="18" viewBox="0 0 24 24" fill="#f5b400" stroke="#fff" stroke-width="1.3" ...>...</svg>`, // 金
-  `<svg width="18" height="18" viewBox="0 0 24 24" fill="#c2703d" stroke="#fff" stroke-width="1.3" ...>...</svg>`, // 銅（彩度を上げた銅色）
-];
+// ★ 修正：以前は金・銀・銅の3つが同じ形のアイコンを色だけ変えて表示していたため、
+//   色の差が分かりにくく「全部1位に見える」という指摘があった。線画から塗りつぶしに変え、
+//   色そのものもよりはっきり離す（銀は明度を落とし、銅は彩度を上げる）ことで見分けやすくした。
+// ★ 追加のバグ修正：その際、メダル中央の数字部分（当時は簡易的な縦棒1本）を
+//   3つとも同じpath（"1"に見える棒）のままコピーしてしまっており、2位・3位の
+//   メダルにも常に「1」が表示されていた（「順位が2位3位でもメダルの数字が
+//   1になってる」との指摘で発覚）。数字は実際のSVG<text>で描画し、rankごとに
+//   正しい値（2位なら"2"、3位なら"3"）を出すよう修正。
+function medalSvg(color, rank) {
+  return `<svg width="18" height="18" viewBox="0 0 24 24" fill="${color}" stroke="#fff" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:-3px;flex-shrink:0" aria-hidden="true"><path d="M9 9.6 6.3 3.2h3.1L12 8.4"/><path d="M15 9.6 17.7 3.2h-3.1L12 8.4"/><circle cx="12" cy="15" r="5.8"/><text x="12" y="17.6" text-anchor="middle" font-size="7" font-weight="800" fill="#fff" font-family="sans-serif">${rank}</text></svg>`;
+}
+const medalMap = [medalSvg('#94a3b8', 2), medalSvg('#f5b400', 1), medalSvg('#c2703d', 3)];
 const podiumClass = ['qz-podium-2', 'qz-podium-1', 'qz-podium-3'];
 document.getElementById('result-podium').innerHTML = podiumOrder.map((p, i) => {
   if (!p) return `<div class="qz-podium-col ${podiumClass[i]}"></div>`;
   return `
     <div class="qz-podium-col ${podiumClass[i]}">
       <div class="qz-podium-name">${escapeHtml(p.nickname)}</div>
-      <div class="qz-podium-score">${p.score}点</div>
+      <div class="qz-podium-score">${p.score}${escapeHtml(p.score_unit || '点')}</div>
       <div class="qz-podium-bar"><span class="qz-podium-medal">${medalMap[i]}</span></div>
     </div>`;
 }).join('');
-// ★ 追加：自分の行をひと目で分かるようにハイライトする
+// ★ 追加：自分の行を一目で分かるようにハイライトする
 document.getElementById('result-list').innerHTML = sorted.map((p, i) => `
   <div class="qz-lb-row${p.id === STUDENT.id ? ' qz-lb-row-me' : ''}">
     <span class="qz-lb-rank">${i + 1}</span>
     <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
     <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
-    <span class="qz-lb-score">${p.score}点</span>
+    ${timeHtml}
+    <span class="qz-lb-score">${p.score}${escapeHtml(p.score_unit || '点')}</span>
   </div>`).join('');
+// ★ timeHtml：p.time_sec（同点時の順位決めに使った回答時間）があるときだけ
+//   <span class="qz-lb-time">12.3秒</span> を出す（無ければ空文字）
 ```
 - 表彰台の見た目（左に2位、真ん中に1位、右に3位、という一般的な表彰台のレイアウト）に合わせて並び替えています。参加者が2人以下の場合、`sorted[2]`（3位）は`undefined`になりますが、`podiumOrder.map`内の`if (!p) return ...`分岐で、存在しない順位は空の列（メダル無しの空の`<div>`）として描画され、エラーにはなりません。
 - ★ 修正（2026/08/27）：以前は`[...room.players].sort((a, b) => b.score - a.score)`とスコアだけで**クライアント側が独自に再ソート**していましたが、これだとサーバー側が同点タイブレーク（回答時間の合計）まで含めて並べ替えた順番が、ここで台無しになってしまっていました。サーバー側の並び順をそのまま信用する（`const sorted = room.players;`）ように直し、`renderPlayScreen`のミニ順位表（3.5節）と同じ「サーバーを正とする」設計に統一しました。
@@ -423,10 +479,13 @@ document.getElementById('result-list').innerHTML = sorted.map((p, i) => `
 
 ---
 
-## 7. 締めくくり（967〜971行）
+## 7. 締めくくり（1649〜1653行）
 
 ```js
 initQuizApp();
+
+// ★ ここまでエラーなく実行できた＝JSが生きている合図として、<body>先頭の
+//   「読み込み中…」代替表示（js-fail-fallback、Icons.js参照）を消す。
 hideLoadingFallback();
 ```
 - [00_HTML構造とその1_起動と参加画面.md](00_HTML構造とその1_起動と参加画面.md)で説明した起動処理を実際に呼び出し、最後に「読み込み中…」保険オーバーレイを消します。
@@ -449,36 +508,60 @@ function renderRanking(room) {
     ? `あなたは 現在 ${myIndex + 1}位 / ${room.players.length}人中`
     : '';
 
-  const firstTops = {}; // First：描画し直す前の各行の位置
-  [...listEl.children].forEach(row => {
+  const firstTops = {};  // First：描画し直す前の各行の位置
+  const firstRanks = {}; // ★ 追加：描画し直す前の各行の順位（▲▼矢印の判定用）
+  [...listEl.children].forEach((row, i) => {
     firstTops[row.dataset.playerId] = row.getBoundingClientRect().top;
+    firstRanks[row.dataset.playerId] = i + 1;
   });
+  const isFirstReveal = !Object.keys(firstTops).length; // このルームで途中経過を見せるのが初回か
 
-  listEl.innerHTML = room.players.map((p, i) => `
+  // Last：新しい順位でDOMを作り直す（自分の行は一目で分かるようにハイライトする）
+  listEl.innerHTML = room.players.map((p, i) => {
+    const oldRank = firstRanks[p.id];
+    let moveHtml = '';
+    if (oldRank !== undefined && oldRank !== i + 1) {
+      moveHtml = `<span class="qz-rank-move ${oldRank > i + 1 ? 'up' : 'down'}"></span>`;
+    }
+    return `
     <div class="qz-lb-row${p.id === STUDENT.id ? ' qz-lb-row-me' : ''}" data-player-id="${p.id}">
-      <span class="qz-lb-rank">${i + 1}</span>
-      <span class="qz-avatar" ...>${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
+      <span class="qz-lb-rank">${i + 1}${moveHtml}</span>
+      <span class="qz-avatar" style="background:${escapeHtml(p.color)};color:${escapeHtml(p.text_color)}">${escapeHtml((p.nickname || '').slice(0, 2).toUpperCase())}</span>
       <span class="qz-lb-name">${escapeHtml(p.nickname)}</span>
-      <span class="qz-lb-score">${p.score}点</span>
-    </div>`).join('');
+      ${timeHtml}
+      <span class="qz-lb-score">${p.score}${escapeHtml(p.score_unit || '点')}</span>
+    </div>`;
+  }).join('');
 
+  // ★ 追加：参加者が多くリストが内部スクロールする場合でも、自分の順位が
+  //   隠れたままにならないよう、自分の行を（必要な時だけ）表示範囲に入れる。
   const myRow = listEl.querySelector('.qz-lb-row-me');
   if (myRow) myRow.scrollIntoView({ block: 'nearest' });
 
-  if (!Object.keys(firstTops).length) return; // 初回（1問目終了後）は前回位置が無いのでアニメーションなしで出す
+  if (isFirstReveal) {
+    // ★ 前回位置が無く移動アニメーションを付けられない代わりに、上から順に
+    //   少しずつ遅れて現れる演出にする（モーションを増やす③）。
+    [...listEl.children].forEach((row, i) => {
+      row.style.animation = `qzRowIn .4s cubic-bezier(.2,.8,.2,1) both`;
+      row.style.animationDelay = `${Math.min(i * 35, 350)}ms`;
+    });
+    return;
+  }
 
+  // Invert：前回位置が分かる行だけ、動いた分だけ逆方向にずらして「まだ前回の位置にいる」ように見せる
   const rows = [...listEl.children];
   rows.forEach(row => {
     const oldTop = firstTops[row.dataset.playerId];
-    if (oldTop === undefined) return;
+    if (oldTop === undefined) return; // 新規参加者などはアニメーションなしでそのまま出す
     const delta = oldTop - row.getBoundingClientRect().top;
     if (!delta) return;
     row.style.transition = 'none';
     row.style.transform = `translateY(${delta}px)`;
   });
-  void listEl.offsetHeight; // 強制リフローでtransformを確定させてから外す
+  void listEl.offsetHeight; // 強制リフローでtransformを確定させてから外す（Play）
   rows.forEach(row => {
-    row.style.transition = 'transform .5s cubic-bezier(.2,.8,.2,1)';
+    // ★ モーションを増やす②：少し弾む（オーバーシュートする）イージングに変更
+    row.style.transition = 'transform .6s cubic-bezier(.34,1.56,.64,1)';
     row.style.transform = '';
   });
 }
@@ -511,6 +594,11 @@ if (room.spectating) {
   document.getElementById(waitingNoteId).style.display = 'none';
   document.getElementById(revealPanelId).style.display = 'none';
   document.getElementById(answeredCountId).textContent = '';
+  if (bonusBadgeId) document.getElementById(bonusBadgeId).style.display = 'none';
+  // ★ 追加：並び替えの解答欄・画像も見学中は出さない
+  if (orderEl) { orderEl.style.display = 'none'; orderEl.replaceChildren(); orderEl.dataset.sig = ''; }
+  if (qImagesEl) { qImagesEl.style.display = 'none'; qImagesEl.replaceChildren(); qImagesEl.dataset.sig = ''; }
+  if (revealExtraEl) { revealExtraEl.style.display = 'none'; revealExtraEl.replaceChildren(); revealExtraEl.dataset.sig = ''; }
   const timerEl = document.getElementById(timerbarId);
   delete timerEl.dataset.startedAt; delete timerEl.dataset.limit;
   timerEl.style.transform = 'scaleX(0)';
